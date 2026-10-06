@@ -28,10 +28,12 @@ import {
   Upload,
   Edit3,
   Phone,
-  Heart,
   Calendar,
   MapPin,
-  Filter
+  Filter,
+  ArrowLeft,
+  Briefcase,
+  Mail
 } from "lucide-react";
 import { supabase } from "./lib/supabase";
 
@@ -62,6 +64,18 @@ interface Student {
   academic_year?: string;
 }
 
+interface Teacher {
+  id: string;
+  teacher_id: string;
+  full_name: string;
+  designation: string;
+  subject_speciality: string;
+  phone: string;
+  email: string;
+  joining_date?: string;
+  avatar_url?: string;
+}
+
 const CLASS_LIST = [
   "Play", "Nursery", "KG",
   "Class 1", "Class 2", "Class 3", "Class 4", "Class 5",
@@ -82,13 +96,33 @@ export default function App() {
   const [authError, setAuthError] = useState("");
 
   // Navigation & Data
-  const [activeTab, setActiveTab] = useState<string>("students");
+  const [activeTab, setActiveTab] = useState<string>("dashboard");
   const [students, setStudents] = useState<Student[]>([]);
   const [loadingStudents, setLoadingStudents] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedClassFilter, setSelectedClassFilter] = useState("All");
 
-  // Modals
+  // Classes View Drill-down
+  const [selectedClassView, setSelectedClassView] = useState<string | null>(null);
+
+  // Teachers State
+  const [teachers, setTeachers] = useState<Teacher[]>([]);
+  const [loadingTeachers, setLoadingTeachers] = useState(false);
+  const [isAddTeacherOpen, setIsAddTeacherOpen] = useState(false);
+  const [teacherSubmitting, setTeacherSubmitting] = useState(false);
+  const [teacherSearch, setTeacherSearch] = useState("");
+  const [teacherForm, setTeacherForm] = useState({
+    teacher_id: "",
+    full_name: "",
+    designation: "Assistant Teacher",
+    subject_speciality: "Mathematics",
+    phone: "",
+    email: "",
+    joining_date: "2026-01-01",
+    avatar_url: ""
+  });
+
+  // Student Modals
   const [isAddStudentOpen, setIsAddStudentOpen] = useState(false);
   const [selectedStudentProfile, setSelectedStudentProfile] = useState<Student | null>(null);
   const [isEditing, setIsEditing] = useState(false);
@@ -113,7 +147,7 @@ export default function App() {
     avatar_url: ""
   });
 
-  // Photo Upload & Processing State
+  // Photo Upload State
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [processingPhoto, setProcessingPhoto] = useState(false);
@@ -155,7 +189,7 @@ export default function App() {
     setLoginPassword("");
   };
 
-  // --- Fetch Students with Enrollments ---
+  // --- Fetch Students ---
   const fetchStudents = async () => {
     try {
       setLoadingStudents(true);
@@ -173,7 +207,6 @@ export default function App() {
 
       if (sErr) throw sErr;
 
-      // Flatten enrollment data
       const formatted: Student[] = (studentsData || []).map((s: any) => {
         const latestEnroll = s.enrollments?.[0];
         return {
@@ -186,19 +219,38 @@ export default function App() {
 
       setStudents(formatted);
     } catch (err) {
-      console.error("Fetch error:", err);
+      console.error("Fetch students error:", err);
     } finally {
       setLoadingStudents(false);
+    }
+  };
+
+  // --- Fetch Teachers ---
+  const fetchTeachers = async () => {
+    try {
+      setLoadingTeachers(true);
+      const { data, error } = await supabase
+        .from("teachers")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+      setTeachers(data || []);
+    } catch (err) {
+      console.error("Fetch teachers error:", err);
+    } finally {
+      setLoadingTeachers(false);
     }
   };
 
   useEffect(() => {
     if (currentUser) {
       fetchStudents();
+      fetchTeachers();
     }
   }, [currentUser]);
 
-  // --- Passport Photo Auto Crop & Compress (35mm x 45mm, <200KB) ---
+  // --- Passport Photo Auto Crop (35mm x 45mm, <200KB) ---
   const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || !e.target.files[0]) return;
     const file = e.target.files[0];
@@ -207,7 +259,6 @@ export default function App() {
     try {
       const bitmap = await createImageBitmap(file);
       const canvas = document.createElement("canvas");
-      // 35mm x 45mm Target (Ratio ~ 7:9)
       const targetWidth = 420;
       const targetHeight = 540;
       canvas.width = targetWidth;
@@ -216,7 +267,6 @@ export default function App() {
       const ctx = canvas.getContext("2d");
       if (!ctx) throw new Error("Canvas unsupported");
 
-      // Calculate center crop
       const sourceAspect = bitmap.width / bitmap.height;
       const targetAspect = targetWidth / targetHeight;
       let sx = 0, sy = 0, sWidth = bitmap.width, sHeight = bitmap.height;
@@ -233,7 +283,6 @@ export default function App() {
       ctx.imageSmoothingQuality = "high";
       ctx.drawImage(bitmap, sx, sy, sWidth, sHeight, 0, 0, targetWidth, targetHeight);
 
-      // Iterative Compression (< 200 KB)
       let quality = 0.90;
       let finalBlob: Blob | null = null;
       while (quality >= 0.35) {
@@ -251,13 +300,13 @@ export default function App() {
       }
     } catch (err) {
       console.error("Photo processing failed:", err);
-      alert("Failed to process photo. Please choose another image.");
+      alert("Failed to process photo.");
     } finally {
       setProcessingPhoto(false);
     }
   };
 
-  // --- Save / Update Student ---
+  // --- Save Student ---
   const handleSaveStudent = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormSubmitting(true);
@@ -265,7 +314,6 @@ export default function App() {
     try {
       let avatarUrl = studentForm.avatar_url;
 
-      // 1. Upload photo if selected
       if (photoFile) {
         const filePath = `avatars/${Date.now()}_${studentForm.admission_number}.jpg`;
         const { error: uploadErr } = await supabase.storage
@@ -281,7 +329,6 @@ export default function App() {
       }
 
       if (isEditing) {
-        // Update Student
         const { error: sUpdateErr } = await supabase
           .from("students")
           .update({
@@ -300,7 +347,6 @@ export default function App() {
 
         if (sUpdateErr) throw sUpdateErr;
 
-        // Update Enrollment
         await supabase
           .from("enrollments")
           .upsert({
@@ -310,9 +356,8 @@ export default function App() {
             section: studentForm.section
           }, { onConflict: "student_id,academic_year" });
 
-        alert("Student profile updated successfully!");
+        alert("Student updated successfully!");
       } else {
-        // Insert Student
         const { data: newS, error: insertErr } = await supabase
           .from("students")
           .insert([
@@ -335,7 +380,6 @@ export default function App() {
 
         if (insertErr) throw insertErr;
 
-        // Create Enrollment Record
         await supabase.from("enrollments").insert([
           {
             student_id: newS.id,
@@ -346,7 +390,6 @@ export default function App() {
           }
         ]);
 
-        // Auto create User Account for Student Login
         await supabase.from("user_accounts").insert([
           {
             user_id_code: studentForm.admission_number.trim(),
@@ -357,7 +400,7 @@ export default function App() {
           }
         ]);
 
-        alert(`Student added successfully! Default login password is: 123456`);
+        alert(`Student added! Login ID: ${studentForm.admission_number}, Password: 123456`);
       }
 
       await fetchStudents();
@@ -418,7 +461,7 @@ export default function App() {
   };
 
   const handleDeleteStudent = async (id: string, name: string) => {
-    if (!confirm(`Are you sure you want to delete ${name}? All academic and attendance records will be removed.`)) return;
+    if (!confirm(`Are you sure you want to delete ${name}?`)) return;
 
     try {
       const { error } = await supabase.from("students").delete().eq("id", id);
@@ -431,6 +474,75 @@ export default function App() {
     }
   };
 
+  // --- Add Teacher Handler ---
+  const handleSaveTeacher = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setTeacherSubmitting(true);
+
+    try {
+      const { data: newTeacher, error: tErr } = await supabase
+        .from("teachers")
+        .insert([
+          {
+            teacher_id: teacherForm.teacher_id.trim(),
+            full_name: teacherForm.full_name.trim(),
+            designation: teacherForm.designation,
+            subject_speciality: teacherForm.subject_speciality,
+            phone: teacherForm.phone.trim(),
+            email: teacherForm.email.trim(),
+            joining_date: teacherForm.joining_date,
+            avatar_url: teacherForm.avatar_url || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150"
+          }
+        ])
+        .select()
+        .single();
+
+      if (tErr) throw tErr;
+
+      // Automatically create User Account for Teacher Login
+      await supabase.from("user_accounts").insert([
+        {
+          user_id_code: teacherForm.teacher_id.trim(),
+          password_hash: "123456",
+          role: "teacher",
+          full_name: teacherForm.full_name.trim(),
+          is_first_login: false
+        }
+      ]);
+
+      alert(`Teacher registered! Login ID: ${teacherForm.teacher_id}, Default Password: 123456`);
+      await fetchTeachers();
+      setIsAddTeacherOpen(false);
+      setTeacherForm({
+        teacher_id: "",
+        full_name: "",
+        designation: "Assistant Teacher",
+        subject_speciality: "Mathematics",
+        phone: "",
+        email: "",
+        joining_date: "2026-01-01",
+        avatar_url: ""
+      });
+    } catch (err: any) {
+      alert(err.message || "Failed to add teacher");
+    } finally {
+      setTeacherSubmitting(false);
+    }
+  };
+
+  const handleDeleteTeacher = async (id: string, name: string) => {
+    if (!confirm(`Are you sure you want to remove teacher ${name}?`)) return;
+
+    try {
+      const { error } = await supabase.from("teachers").delete().eq("id", id);
+      if (error) throw error;
+      setTeachers(teachers.filter((t) => t.id !== id));
+      alert("Teacher removed successfully.");
+    } catch (err: any) {
+      alert(err.message || "Failed to delete teacher");
+    }
+  };
+
   // Filter students
   const filteredStudents = students.filter((s) => {
     const fullName = `${s.first_name || ""} ${s.last_name || ""}`.toLowerCase();
@@ -440,6 +552,19 @@ export default function App() {
     const matchClass = selectedClassFilter === "All" || s.class === selectedClassFilter;
     return matchSearch && matchClass;
   });
+
+  // Filter teachers
+  const filteredTeachers = teachers.filter((t) => {
+    const name = t.full_name.toLowerCase();
+    const id = t.teacher_id.toLowerCase();
+    const sub = (t.subject_speciality || "").toLowerCase();
+    return name.includes(teacherSearch.toLowerCase()) || id.includes(teacherSearch.toLowerCase()) || sub.includes(teacherSearch.toLowerCase());
+  });
+
+  // Class Drill-down students
+  const classStudents = selectedClassView
+    ? students.filter((s) => s.class === selectedClassView)
+    : [];
 
   // =========================================================================
   // VIEW 1: LOGIN PORTAL
@@ -555,7 +680,10 @@ export default function App() {
                 return (
                   <button
                     key={item.id}
-                    onClick={() => setActiveTab(item.id)}
+                    onClick={() => {
+                      setActiveTab(item.id);
+                      setSelectedClassView(null);
+                    }}
                     className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all cursor-pointer ${
                       isActive
                         ? "bg-amber-500/15 text-amber-400 border border-amber-500/30 shadow-sm"
@@ -605,10 +733,258 @@ export default function App() {
         </header>
 
         <div className="p-8 max-w-7xl w-full mx-auto space-y-6">
-          {/* ================= STUDENTS TAB ================= */}
+          {/* ================= 1. CLASSES TAB ================= */}
+          {activeTab === "classes" && (
+            <div className="space-y-6 animate-in fade-in duration-300">
+              {/* If a class is clicked: Drill-down View */}
+              {selectedClassView ? (
+                <div className="space-y-6">
+                  <div className="flex items-center justify-between bg-slate-900/90 border border-slate-800 p-6 rounded-2xl shadow-xl">
+                    <div className="flex items-center gap-4">
+                      <button
+                        onClick={() => setSelectedClassView(null)}
+                        className="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
+                      >
+                        <ArrowLeft className="w-5 h-5" />
+                      </button>
+                      <div>
+                        <h2 className="text-2xl font-bold text-white tracking-tight flex items-center gap-2">
+                          {selectedClassView}
+                          <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                            {classStudents.length} Students
+                          </span>
+                        </h2>
+                        <p className="text-xs text-slate-400 mt-0.5">
+                          Enrolled students in this class for Academic Year 2026
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Student Table for this class */}
+                  {classStudents.length === 0 ? (
+                    <div className="p-16 text-center text-slate-500 bg-slate-900/40 rounded-2xl border border-slate-800">
+                      <Users className="w-12 h-12 mx-auto text-slate-600 mb-2" />
+                      <p className="text-base font-semibold text-slate-300">No students enrolled in {selectedClassView}</p>
+                      <p className="text-xs text-slate-500 mt-1">Go to Students menu to add students to this class.</p>
+                    </div>
+                  ) : (
+                    <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-sm text-slate-300">
+                          <thead className="bg-[#0b142b] text-[11px] uppercase tracking-wider text-slate-400 border-b border-slate-800">
+                            <tr>
+                              <th className="py-4 px-6">Photo</th>
+                              <th className="py-4 px-4">Admission No</th>
+                              <th className="py-4 px-4">Student Name</th>
+                              <th className="py-4 px-4">Section</th>
+                              <th className="py-4 px-4">Gender</th>
+                              <th className="py-4 px-4">Guardian Phone</th>
+                              <th className="py-4 px-6 text-right">Action</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-800/80">
+                            {classStudents.map((student) => (
+                              <tr key={student.id} className="hover:bg-slate-800/40 transition">
+                                <td className="py-4 px-6">
+                                  <img
+                                    src={student.avatar_url || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150"}
+                                    alt="Passport"
+                                    className="w-10 h-12 object-cover rounded-lg border border-slate-700 shadow-sm"
+                                  />
+                                </td>
+                                <td className="py-4 px-4 font-mono font-medium text-amber-400">
+                                  {student.admission_number}
+                                </td>
+                                <td className="py-4 px-4 font-semibold text-white">
+                                  {student.first_name} {student.last_name}
+                                </td>
+                                <td className="py-4 px-4">
+                                  <span className="px-2.5 py-0.5 rounded-md text-xs font-bold bg-slate-950 border border-slate-800 text-slate-200">
+                                    Section {student.section || "A"}
+                                  </span>
+                                </td>
+                                <td className="py-4 px-4 capitalize text-slate-400">{student.gender}</td>
+                                <td className="py-4 px-4 text-slate-400 font-mono text-xs">{student.guardian_phone || "—"}</td>
+                                <td className="py-4 px-6 text-right">
+                                  <button
+                                    onClick={() => setSelectedStudentProfile(student)}
+                                    title="View Profile"
+                                    className="p-2 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
+                                  >
+                                    <Eye className="w-4 h-4" />
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* All Classes Cards Grid */
+                <div className="space-y-6">
+                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-900/90 border border-slate-800 p-6 rounded-2xl shadow-xl">
+                    <div>
+                      <h2 className="text-2xl font-bold text-white tracking-tight">Academic Classes</h2>
+                      <p className="text-sm text-slate-400 mt-1">
+                        Select any class from Play to Class 12 to view its enrolled students
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+                    {CLASS_LIST.map((className) => {
+                      const count = students.filter((s) => s.class === className).length;
+                      return (
+                        <div
+                          key={className}
+                          onClick={() => setSelectedClassView(className)}
+                          className="bg-slate-900/80 border border-slate-800 hover:border-amber-500/50 p-5 rounded-2xl shadow-lg transition-all hover:-translate-y-1 cursor-pointer group"
+                        >
+                          <div className="flex items-center justify-between mb-3">
+                            <span className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 font-bold text-sm group-hover:scale-110 transition">
+                              <BookOpen className="w-5 h-5" />
+                            </span>
+                            <span className="text-xs px-2.5 py-0.5 rounded-full font-bold bg-slate-950 text-slate-400 border border-slate-800">
+                              Sec A, B
+                            </span>
+                          </div>
+
+                          <h3 className="text-base font-bold text-white group-hover:text-amber-400 transition">
+                            {className}
+                          </h3>
+
+                          <div className="mt-3 pt-3 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
+                            <span>Students:</span>
+                            <span className="font-bold text-amber-400 font-mono text-sm">{count}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ================= 2. TEACHERS TAB ================= */}
+          {activeTab === "teachers" && (
+            <div className="space-y-6 animate-in fade-in duration-300">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-900/90 border border-slate-800 p-6 rounded-2xl shadow-xl">
+                <div>
+                  <h2 className="text-2xl font-bold text-white tracking-tight">Teachers Management</h2>
+                  <p className="text-sm text-slate-400 mt-1">
+                    Manage faculty members, designations, subjects and login credentials
+                  </p>
+                </div>
+                {isRole === "admin" && (
+                  <button
+                    onClick={() => {
+                      const nextId = `TCH-2026-${String(teachers.length + 1).padStart(3, "0")}`;
+                      setTeacherForm({
+                        ...teacherForm,
+                        teacher_id: nextId
+                      });
+                      setIsAddTeacherOpen(true);
+                    }}
+                    className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 font-bold px-5 py-2.5 rounded-xl shadow-lg shadow-amber-500/20 transition-all cursor-pointer"
+                  >
+                    <Plus className="h-4 w-4 stroke-[3]" />
+                    Add Teacher
+                  </button>
+                )}
+              </div>
+
+              {/* Search Bar */}
+              <div className="flex justify-between items-center bg-slate-900/40 p-4 rounded-xl border border-slate-800">
+                <span className="text-xs font-semibold text-slate-400">
+                  Total Faculty: <b className="text-amber-400 font-mono">{teachers.length} Teachers</b>
+                </span>
+                <div className="relative w-72">
+                  <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
+                  <input
+                    type="text"
+                    placeholder="Search name, ID or subject..."
+                    value={teacherSearch}
+                    onChange={(e) => setTeacherSearch(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2 bg-slate-950/80 border border-slate-800 rounded-xl text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-amber-500/60 transition"
+                  />
+                </div>
+              </div>
+
+              {/* Teachers Cards Grid */}
+              {loadingTeachers ? (
+                <div className="p-16 text-center text-slate-400 bg-slate-900/40 rounded-2xl border border-slate-800">
+                  <Loader2 className="w-8 h-8 animate-spin mx-auto text-amber-500 mb-3" />
+                  <p>Loading faculty records...</p>
+                </div>
+              ) : filteredTeachers.length === 0 ? (
+                <div className="p-16 text-center text-slate-500 bg-slate-900/40 rounded-2xl border border-slate-800">
+                  <UserCheck className="w-12 h-12 mx-auto text-slate-600 mb-2" />
+                  <p className="text-base font-semibold text-slate-300">No teachers found</p>
+                  <p className="text-xs text-slate-500 mt-1">Click "Add Teacher" to register faculty members.</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                  {filteredTeachers.map((teacher) => (
+                    <div
+                      key={teacher.id}
+                      className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl relative hover:border-slate-700 transition"
+                    >
+                      <div className="flex items-start gap-4 pb-4 border-b border-slate-800">
+                        <img
+                          src={teacher.avatar_url || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150"}
+                          alt={teacher.full_name}
+                          className="w-16 h-18 object-cover rounded-xl border border-slate-700 shadow-sm"
+                        />
+                        <div className="flex-1 overflow-hidden">
+                          <h3 className="text-lg font-bold text-white truncate">{teacher.full_name}</h3>
+                          <p className="text-xs text-amber-400 font-mono font-semibold">{teacher.teacher_id}</p>
+                          <span className="inline-block mt-1 px-2.5 py-0.5 rounded-md text-[11px] font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                            {teacher.designation}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2 mt-4 text-xs text-slate-300">
+                        <div className="flex items-center gap-2 text-slate-400">
+                          <Briefcase className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                          <span>Speciality: <b className="text-slate-200">{teacher.subject_speciality || "All"}</b></span>
+                        </div>
+                        <div className="flex items-center gap-2 text-slate-400">
+                          <Phone className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                          <span className="font-mono">{teacher.phone || "—"}</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-slate-400">
+                          <Mail className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                          <span className="truncate">{teacher.email || "—"}</span>
+                        </div>
+                      </div>
+
+                      {isRole === "admin" && (
+                        <div className="mt-5 pt-3 border-t border-slate-800 flex justify-end">
+                          <button
+                            onClick={() => handleDeleteTeacher(teacher.id, teacher.full_name)}
+                            title="Delete Teacher"
+                            className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition cursor-pointer"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ================= 3. STUDENTS TAB ================= */}
           {activeTab === "students" && (
             <div className="space-y-6 animate-in fade-in duration-300">
-              {/* Header Card */}
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-900/90 border border-slate-800 p-6 rounded-2xl shadow-xl">
                 <div>
                   <h2 className="text-2xl font-bold text-white tracking-tight">Student Management</h2>
@@ -766,13 +1142,13 @@ export default function App() {
             </div>
           )}
 
-          {/* ================= DASHBOARD TAB ================= */}
+          {/* ================= 4. DASHBOARD TAB ================= */}
           {activeTab === "dashboard" && (
             <div className="space-y-6 animate-in fade-in duration-300">
               <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
                 {[
                   { label: "Total Students", value: students.length, icon: Users, color: "text-amber-400", tab: "students" },
-                  { label: "Total Teachers", value: "1", icon: UserCheck, color: "text-blue-400", tab: "teachers" },
+                  { label: "Total Faculty", value: teachers.length, icon: UserCheck, color: "text-blue-400", tab: "teachers" },
                   { label: "Total Classes", value: CLASS_LIST.length, icon: BookOpen, color: "text-emerald-400", tab: "classes" },
                   { label: "Fees Collected", value: "৳ 1,500", icon: TrendingUp, color: "text-purple-400", tab: "fees" }
                 ].map((stat, i) => {
@@ -796,15 +1172,15 @@ export default function App() {
             </div>
           )}
 
-          {/* ================= OTHER PLACEHOLDER TABS ================= */}
-          {activeTab !== "students" && activeTab !== "dashboard" && (
+          {/* ================= 5. OTHER PLACEHOLDER TABS ================= */}
+          {activeTab !== "students" && activeTab !== "teachers" && activeTab !== "classes" && activeTab !== "dashboard" && (
             <div className="p-16 bg-slate-900/60 border border-slate-800 rounded-2xl text-center space-y-3">
               <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mx-auto">
                 <BookOpen className="w-7 h-7" />
               </div>
               <h3 className="text-xl font-bold text-white capitalize">{activeTab} Section</h3>
               <p className="text-sm text-slate-400 max-w-md mx-auto">
-                Current Role: <b>{isRole}</b>. Proceeding to Phase 4 & beyond for this module.
+                Current Role: <b>{isRole}</b>. Proceeding to Phase 5 & beyond for this module.
               </p>
             </div>
           )}
@@ -838,7 +1214,6 @@ export default function App() {
             </div>
 
             <form onSubmit={handleSaveStudent} className="space-y-4 mt-5">
-              {/* Photo Upload Section */}
               <div className="p-4 bg-slate-950/60 border border-dashed border-slate-800 rounded-2xl flex items-center gap-5">
                 <div className="relative">
                   <div className="w-20 h-24 rounded-xl bg-slate-900 border border-slate-700 flex items-center justify-center overflow-hidden shadow-inner">
@@ -880,7 +1255,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Personal Info */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">First Name *</label>
@@ -910,7 +1284,7 @@ export default function App() {
                     type="text"
                     required
                     disabled={isEditing}
-                    placeholder="SA-2026-001"
+                    placeholder="SA-2026-002"
                     value={studentForm.admission_number}
                     onChange={(e) => setStudentForm({ ...studentForm, admission_number: e.target.value })}
                     className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm font-mono text-amber-400 focus:outline-none focus:border-amber-500 disabled:opacity-60"
@@ -918,7 +1292,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Academic Placement */}
               <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                 <div className="sm:col-span-2">
                   <label className="block text-xs font-semibold text-slate-300 mb-1">Class *</label>
@@ -955,7 +1328,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Bio & Blood Group */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">Date of Birth *</label>
@@ -992,7 +1364,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Guardians Info */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-slate-800">
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">Father's Name</label>
@@ -1038,7 +1409,6 @@ export default function App() {
                 />
               </div>
 
-              {/* Action Buttons */}
               <div className="flex items-center gap-3 pt-4 border-t border-slate-800">
                 <button
                   type="button"
@@ -1077,7 +1447,6 @@ export default function App() {
               <X className="w-5 h-5" />
             </button>
 
-            {/* Profile Header */}
             <div className="flex items-center gap-5 pb-6 border-b border-slate-800">
               <img
                 src={selectedStudentProfile.avatar_url || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150"}
@@ -1102,7 +1471,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Profile Body Info */}
             <div className="grid grid-cols-2 gap-3.5 my-6 text-sm">
               <div className="p-3.5 bg-slate-950/60 rounded-xl border border-slate-800/80">
                 <span className="text-[11px] text-slate-500 flex items-center gap-1.5">
@@ -1138,7 +1506,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Admin Profile Actions */}
             {isRole === "admin" && (
               <div className="flex items-center gap-3 pt-4 border-t border-slate-800">
                 <button
@@ -1156,6 +1523,139 @@ export default function App() {
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL 3: ADD TEACHER ================= */}
+      {isAddTeacherOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 overflow-y-auto animate-in fade-in duration-200"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsAddTeacherOpen(false);
+          }}
+        >
+          <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl p-7 text-slate-100 shadow-2xl relative my-8">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+              <div>
+                <h3 className="text-xl font-bold text-white">Register Faculty Member</h3>
+                <p className="text-xs text-slate-400 mt-0.5">Creates a teacher profile & login credentials</p>
+              </div>
+              <button
+                onClick={() => setIsAddTeacherOpen(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveTeacher} className="space-y-4 mt-5">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">Teacher Full Name *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Mahbubul Alam"
+                    value={teacherForm.full_name}
+                    onChange={(e) => setTeacherForm({ ...teacherForm, full_name: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">Teacher ID *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="TCH-2026-002"
+                    value={teacherForm.teacher_id}
+                    onChange={(e) => setTeacherForm({ ...teacherForm, teacher_id: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm font-mono text-amber-400 focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">Designation *</label>
+                  <select
+                    value={teacherForm.designation}
+                    onChange={(e) => setTeacherForm({ ...teacherForm, designation: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-amber-500"
+                  >
+                    <option value="Headmaster">Headmaster</option>
+                    <option value="Assistant Headmaster">Assistant Headmaster</option>
+                    <option value="Senior Teacher">Senior Teacher</option>
+                    <option value="Assistant Teacher">Assistant Teacher</option>
+                    <option value="Junior Teacher">Junior Teacher</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">Subject Speciality *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Mathematics, English"
+                    value={teacherForm.subject_speciality}
+                    onChange={(e) => setTeacherForm({ ...teacherForm, subject_speciality: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">Phone Number *</label>
+                  <input
+                    type="tel"
+                    required
+                    placeholder="017XXXXXXXX"
+                    value={teacherForm.phone}
+                    onChange={(e) => setTeacherForm({ ...teacherForm, phone: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm font-mono text-white focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">Email Address</label>
+                  <input
+                    type="email"
+                    placeholder="teacher@academy.com"
+                    value={teacherForm.email}
+                    onChange={(e) => setTeacherForm({ ...teacherForm, email: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Photo URL (Optional)</label>
+                <input
+                  type="url"
+                  placeholder="Paste image link or leave blank"
+                  value={teacherForm.avatar_url}
+                  onChange={(e) => setTeacherForm({ ...teacherForm, avatar_url: e.target.value })}
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div className="flex items-center gap-3 pt-4 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setIsAddTeacherOpen(false)}
+                  className="flex-1 px-4 py-2.5 rounded-xl border border-slate-800 bg-slate-800/60 hover:bg-slate-800 text-sm font-medium text-slate-300 transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={teacherSubmitting}
+                  className="flex-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold py-2.5 rounded-xl transition shadow-lg shadow-amber-500/20 cursor-pointer flex items-center justify-center gap-2"
+                >
+                  {teacherSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
+                  Save Teacher & Create ID
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
