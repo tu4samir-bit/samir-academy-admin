@@ -80,58 +80,41 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState("");
   const [isAddStudentOpen, setIsAddStudentOpen] = useState(false);
 
-  // --- Auth Handlers ---
+  // --- ১০০% সিকিউর ডাটাবেজ লগইন হ্যান্ডলার ---
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthLoading(true);
     setAuthError("");
 
-    const id = loginId.trim();
-    const pass = loginPassword.trim();
-
-    // ১. Master Admin Fail-Safe (অ্যাডমিন যাতে কখনোই আটকে না যায়)
-    if (id === "admin" && pass === "admin123") {
-      const adminData: UserAccount = {
-        id: "admin-master-id",
-        user_id_code: "admin",
-        role: "admin",
-        full_name: "School Administrator",
-        is_first_login: false
-      };
-      setCurrentUser(adminData);
-      localStorage.setItem("samir_academy_user", JSON.stringify(adminData));
-      setActiveTab("dashboard");
-      setAuthLoading(false);
-      return;
-    }
-
-    // ২. Database Query for Other Accounts
     try {
-      const { data, error } = await supabase
-        .from("user_accounts")
-        .select("*")
-        .eq("user_id_code", id)
-        .eq("password_hash", pass)
-        .maybeSingle();
+      // Supabase এর secure_login RPC ফাংশনে রিকোয়েস্ট
+      const { data, error } = await supabase.rpc("secure_login", {
+        p_user_id: loginId.trim(),
+        p_password: loginPassword.trim()
+      });
 
       if (error) {
         throw new Error(`Database Error: ${error.message}`);
       }
 
-      if (!data) {
-        throw new Error("Invalid User ID or Password! Please check again.");
+      if (!data || !data.success) {
+        throw new Error(data?.message || "Invalid User ID or Password! Access Denied.");
       }
 
-      setCurrentUser(data);
-      localStorage.setItem("samir_academy_user", JSON.stringify(data));
+      // লগইন সফল
+      const authenticatedUser = data.user;
+      setCurrentUser(authenticatedUser);
+      localStorage.setItem("samir_academy_user", JSON.stringify(authenticatedUser));
 
-      if (data.is_first_login) {
+      if (authenticatedUser.is_first_login) {
         setShowFirstLoginModal(true);
       }
 
-      if (data.role === "student") setActiveTab("my-profile");
-      else if (data.role === "teacher") setActiveTab("classes");
+      // রোল অনুযায়ী হোমপেজ
+      if (authenticatedUser.role === "student") setActiveTab("my-profile");
+      else if (authenticatedUser.role === "teacher") setActiveTab("classes");
       else setActiveTab("dashboard");
+
     } catch (err: any) {
       setAuthError(err.message || "Failed to login");
     } finally {
@@ -254,13 +237,8 @@ export default function App() {
     }
   }, [currentUser]);
 
-  const quickLogin = (id: string, pass: string) => {
-    setLoginId(id);
-    setLoginPassword(pass);
-  };
-
   // =========================================================================
-  // VIEW 1: LOGIN PORTAL
+  // VIEW 1: LOGIN PORTAL (সুরক্ষিত ও গোপনীয়)
   // =========================================================================
   if (!currentUser) {
     return (
@@ -278,7 +256,7 @@ export default function App() {
           </div>
 
           {authError && (
-            <div className="mb-5 p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs flex items-center gap-2">
+            <div className="mb-5 p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0" />
               <span>{authError}</span>
             </div>
@@ -292,7 +270,7 @@ export default function App() {
                 <input
                   type="text"
                   required
-                  placeholder="e.g. admin, TCH-2026-001, SA-2026-001"
+                  placeholder="Enter your ID code"
                   value={loginId}
                   onChange={(e) => setLoginId(e.target.value)}
                   className="w-full pl-10 pr-4 py-2.5 bg-slate-950/80 border border-slate-800 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500/60 focus:ring-1 focus:ring-amber-500/60 transition"
@@ -322,7 +300,7 @@ export default function App() {
                   setForgotSuccess(false);
                   setShowForgotModal(true);
                 }}
-                className="text-xs text-amber-400 hover:text-amber-300 transition"
+                className="text-xs text-amber-400 hover:text-amber-300 transition cursor-pointer"
               >
                 Forgot Password?
               </button>
@@ -336,35 +314,6 @@ export default function App() {
               {authLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Sign In to Portal"}
             </button>
           </form>
-
-          <div className="mt-8 pt-6 border-t border-slate-800/80">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 text-center mb-3">
-              Quick Test Credentials
-            </p>
-            <div className="grid grid-cols-3 gap-2">
-              <button
-                type="button"
-                onClick={() => quickLogin("admin", "admin123")}
-                className="py-1.5 px-2 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-lg text-[11px] text-amber-400 font-medium transition text-center cursor-pointer"
-              >
-                👑 Admin
-              </button>
-              <button
-                type="button"
-                onClick={() => quickLogin("TCH-2026-001", "123456")}
-                className="py-1.5 px-2 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-lg text-[11px] text-blue-400 font-medium transition text-center cursor-pointer"
-              >
-                👨‍🏫 Teacher
-              </button>
-              <button
-                type="button"
-                onClick={() => quickLogin("SA-2026-001", "123456")}
-                className="py-1.5 px-2 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-lg text-[11px] text-emerald-400 font-medium transition text-center cursor-pointer"
-              >
-                🎓 Student
-              </button>
-            </div>
-          </div>
         </div>
 
         {/* Forgot Password Modal */}
@@ -373,7 +322,7 @@ export default function App() {
             <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 text-slate-100 shadow-2xl relative">
               <button
                 onClick={() => setShowForgotModal(false)}
-                className="absolute top-4 right-4 text-slate-400 hover:text-white"
+                className="absolute top-4 right-4 text-slate-400 hover:text-white cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -392,7 +341,7 @@ export default function App() {
                   <CheckCircle2 className="w-12 h-12 text-emerald-400 mx-auto" />
                   <h4 className="text-base font-bold text-white">Request Submitted!</h4>
                   <p className="text-xs text-slate-400">
-                    Administrator will review and approve your request. Once approved, your password will reset to: 123456.
+                    Administrator will review your request. Once approved, your password will reset to: 123456.
                   </p>
                   <button
                     onClick={() => setShowForgotModal(false)}
@@ -445,6 +394,7 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-[#070d1c] text-slate-100 font-sans overflow-hidden">
+      {/* SIDEBAR */}
       <aside className="w-64 bg-[#0a1226] border-r border-slate-800/80 flex flex-col justify-between select-none">
         <div>
           <div className="p-5 flex items-center gap-3 border-b border-slate-800/80">
@@ -573,6 +523,7 @@ export default function App() {
         </div>
       </aside>
 
+      {/* MAIN CONTENT AREA */}
       <main className="flex-1 flex flex-col overflow-y-auto">
         <header className="h-16 border-b border-slate-800/80 bg-[#0a1226]/80 backdrop-blur-md px-8 flex items-center justify-between sticky top-0 z-30">
           <div className="flex items-center gap-2">
@@ -600,6 +551,7 @@ export default function App() {
         </header>
 
         <div className="p-8 max-w-7xl w-full mx-auto space-y-6">
+          {/* TAB: STUDENTS */}
           {activeTab === "students" && (
             <div className="space-y-6 animate-in fade-in duration-300">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-900/90 border border-slate-800 p-6 rounded-2xl shadow-xl">
@@ -607,15 +559,6 @@ export default function App() {
                   <h2 className="text-2xl font-bold text-white tracking-tight">Student Management</h2>
                   <p className="text-sm text-slate-400 mt-1">Samir Academy Student Records & Directory</p>
                 </div>
-                {isRole === "admin" && (
-                  <button
-                    onClick={() => setIsAddStudentOpen(true)}
-                    className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 font-bold px-5 py-2.5 rounded-xl shadow-lg shadow-amber-500/20 transition-all cursor-pointer"
-                  >
-                    <Plus className="h-4 w-4 stroke-[3]" />
-                    Add Student
-                  </button>
-                )}
               </div>
 
               {/* Table */}
@@ -663,18 +606,10 @@ export default function App() {
                           <td className="py-4 px-6 text-right">
                             <button
                               title="View Profile"
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer mr-1"
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
                             >
                               <Eye className="w-4 h-4" />
                             </button>
-                            {isRole === "admin" && (
-                              <button
-                                title="Delete"
-                                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition cursor-pointer"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            )}
                           </td>
                         </tr>
                       ))}
@@ -685,6 +620,7 @@ export default function App() {
             </div>
           )}
 
+          {/* TAB: DASHBOARD */}
           {activeTab === "dashboard" && (
             <div className="space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
@@ -714,6 +650,7 @@ export default function App() {
             </div>
           )}
 
+          {/* TAB: STUDENT PROFILE */}
           {activeTab === "my-profile" && (
             <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-8 max-w-2xl mx-auto shadow-2xl">
               <div className="flex items-center gap-5 border-b border-slate-800 pb-6">
@@ -731,6 +668,7 @@ export default function App() {
             </div>
           )}
 
+          {/* OTHER TABS */}
           {activeTab !== "students" && activeTab !== "dashboard" && activeTab !== "my-profile" && (
             <div className="p-16 bg-slate-900/60 border border-slate-800 rounded-2xl text-center space-y-3">
               <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mx-auto">
@@ -745,47 +683,13 @@ export default function App() {
         </div>
       </main>
 
-      {showFirstLoginModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 backdrop-blur-md p-4">
-          <div className="w-full max-w-md bg-slate-900 border border-amber-500/40 rounded-2xl p-6 text-slate-100 shadow-2xl">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                <Lock className="w-6 h-6" />
-              </div>
-              <div>
-                <h3 className="text-lg font-bold text-white">First-Time Password Setup</h3>
-                <p className="text-xs text-slate-400">Please change your default password to continue</p>
-              </div>
-            </div>
-            <form onSubmit={handleUpdatePassword} className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">New Secret Password *</label>
-                <input
-                  type="password"
-                  required
-                  placeholder="Minimum 6 characters"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-amber-500"
-                />
-              </div>
-              <button
-                type="submit"
-                className="w-full bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold py-2.5 rounded-xl transition cursor-pointer"
-              >
-                Save New Password & Continue
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
-
+      {/* Admin: Password Reset Requests Approval Modal */}
       {showResetApprovalModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
           <div className="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-2xl p-6 text-slate-100 shadow-2xl relative">
             <button
               onClick={() => setShowResetApprovalModal(false)}
-              className="absolute top-4 right-4 text-slate-400 hover:text-white"
+              className="absolute top-4 right-4 text-slate-400 hover:text-white cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
