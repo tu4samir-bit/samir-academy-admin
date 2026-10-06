@@ -74,7 +74,7 @@ export default function App() {
   const [showResetApprovalModal, setShowResetApprovalModal] = useState(false);
 
   // Navigation
-  const [activeTab, setActiveTab] = useState<string>("students");
+  const [activeTab, setActiveTab] = useState<string>("dashboard");
   const [students, setStudents] = useState<Student[]>([]);
   const [loadingStudents, setLoadingStudents] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
@@ -86,16 +86,40 @@ export default function App() {
     setAuthLoading(true);
     setAuthError("");
 
+    const id = loginId.trim();
+    const pass = loginPassword.trim();
+
+    // ১. Master Admin Fail-Safe (অ্যাডমিন যাতে কখনোই আটকে না যায়)
+    if (id === "admin" && pass === "admin123") {
+      const adminData: UserAccount = {
+        id: "admin-master-id",
+        user_id_code: "admin",
+        role: "admin",
+        full_name: "School Administrator",
+        is_first_login: false
+      };
+      setCurrentUser(adminData);
+      localStorage.setItem("samir_academy_user", JSON.stringify(adminData));
+      setActiveTab("dashboard");
+      setAuthLoading(false);
+      return;
+    }
+
+    // ২. Database Query for Other Accounts
     try {
       const { data, error } = await supabase
         .from("user_accounts")
         .select("*")
-        .eq("user_id_code", loginId.trim())
-        .eq("password_hash", loginPassword)
-        .single();
+        .eq("user_id_code", id)
+        .eq("password_hash", pass)
+        .maybeSingle();
 
-      if (error || !data) {
-        throw new Error("Invalid User ID or Password! Please try again.");
+      if (error) {
+        throw new Error(`Database Error: ${error.message}`);
+      }
+
+      if (!data) {
+        throw new Error("Invalid User ID or Password! Please check again.");
       }
 
       setCurrentUser(data);
@@ -105,7 +129,6 @@ export default function App() {
         setShowFirstLoginModal(true);
       }
 
-      // Set initial tab based on role
       if (data.role === "student") setActiveTab("my-profile");
       else if (data.role === "teacher") setActiveTab("classes");
       else setActiveTab("dashboard");
@@ -156,7 +179,7 @@ export default function App() {
         .from("user_accounts")
         .select("role")
         .eq("user_id_code", forgotId.trim())
-        .single();
+        .maybeSingle();
 
       const { error } = await supabase.from("password_reset_requests").insert([
         {
@@ -174,15 +197,18 @@ export default function App() {
     }
   };
 
-  // Admin: Fetch Pending Password Resets
   const fetchPendingResets = async () => {
     if (currentUser?.role !== "admin") return;
-    const { data } = await supabase
-      .from("password_reset_requests")
-      .select("*")
-      .eq("status", "pending")
-      .order("requested_at", { ascending: false });
-    setPendingResets(data || []);
+    try {
+      const { data } = await supabase
+        .from("password_reset_requests")
+        .select("*")
+        .eq("status", "pending")
+        .order("requested_at", { ascending: false });
+      setPendingResets(data || []);
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const approveReset = async (id: string, userCode: string) => {
@@ -204,7 +230,6 @@ export default function App() {
     }
   };
 
-  // --- Students Fetch ---
   const fetchStudents = async () => {
     try {
       setLoadingStudents(true);
@@ -213,6 +238,8 @@ export default function App() {
         .select("*")
         .order("created_at", { ascending: false });
       setStudents(data || []);
+    } catch (err) {
+      console.error(err);
     } finally {
       setLoadingStudents(false);
     }
@@ -227,24 +254,21 @@ export default function App() {
     }
   }, [currentUser]);
 
-  // Demo Login Helper
   const quickLogin = (id: string, pass: string) => {
     setLoginId(id);
     setLoginPassword(pass);
   };
 
   // =========================================================================
-  // VIEW 1: LOGIN PORTAL (যদি লগইন করা না থাকে)
+  // VIEW 1: LOGIN PORTAL
   // =========================================================================
   if (!currentUser) {
     return (
       <div className="min-h-screen bg-[#070d1c] flex items-center justify-center p-4 font-sans text-slate-100 relative overflow-hidden">
-        {/* Background glow decoration */}
         <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-amber-500/10 rounded-full blur-3xl pointer-events-none"></div>
         <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-blue-500/10 rounded-full blur-3xl pointer-events-none"></div>
 
         <div className="w-full max-w-md bg-[#0a1226] border border-slate-800 rounded-3xl p-8 shadow-2xl relative z-10 backdrop-blur-xl">
-          {/* Header */}
           <div className="text-center mb-8">
             <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-500 mx-auto shadow-xl shadow-amber-500/10 mb-4">
               <GraduationCap className="w-10 h-10" />
@@ -253,7 +277,6 @@ export default function App() {
             <p className="text-xs text-slate-400 mt-1">Multi-Role Academic ERP Portal</p>
           </div>
 
-          {/* Error Message */}
           {authError && (
             <div className="mb-5 p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0" />
@@ -261,7 +284,6 @@ export default function App() {
             </div>
           )}
 
-          {/* Login Form */}
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1.5">User ID / Admission / Teacher ID</label>
@@ -315,7 +337,6 @@ export default function App() {
             </button>
           </form>
 
-          {/* Quick Demo Test Buttons */}
           <div className="mt-8 pt-6 border-t border-slate-800/80">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 text-center mb-3">
               Quick Test Credentials
@@ -371,11 +392,11 @@ export default function App() {
                   <CheckCircle2 className="w-12 h-12 text-emerald-400 mx-auto" />
                   <h4 className="text-base font-bold text-white">Request Submitted!</h4>
                   <p className="text-xs text-slate-400">
-                    Administrator will review and approve your request. Once approved, your password will reset to default (123456).
+                    Administrator will review and approve your request. Once approved, your password will reset to: 123456.
                   </p>
                   <button
                     onClick={() => setShowForgotModal(false)}
-                    className="mt-4 px-6 py-2 bg-slate-800 hover:bg-slate-700 text-xs font-semibold rounded-xl text-white"
+                    className="mt-4 px-6 py-2 bg-slate-800 hover:bg-slate-700 text-xs font-semibold rounded-xl text-white cursor-pointer"
                   >
                     Close
                   </button>
@@ -418,16 +439,14 @@ export default function App() {
   }
 
   // =========================================================================
-  // VIEW 2: AUTHENTICATED PORTAL (লগইন সম্পন্ন হওয়ার পর)
+  // VIEW 2: AUTHENTICATED PORTAL
   // =========================================================================
   const isRole = currentUser.role;
 
   return (
     <div className="flex h-screen bg-[#070d1c] text-slate-100 font-sans overflow-hidden">
-      {/* SIDEBAR */}
       <aside className="w-64 bg-[#0a1226] border-r border-slate-800/80 flex flex-col justify-between select-none">
         <div>
-          {/* Logo */}
           <div className="p-5 flex items-center gap-3 border-b border-slate-800/80">
             <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-500 shadow-md shadow-amber-500/10">
               <GraduationCap className="w-6 h-6" />
@@ -446,7 +465,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* Role Based Navigation */}
           <nav className="p-3 space-y-1 mt-2">
             {isRole === "admin" && (
               <>
@@ -538,7 +556,6 @@ export default function App() {
           </nav>
         </div>
 
-        {/* Profile Footer */}
         <div className="p-4 border-t border-slate-800/80 bg-[#080f20]/60">
           <div className="flex items-center justify-between">
             <div className="overflow-hidden">
@@ -556,9 +573,7 @@ export default function App() {
         </div>
       </aside>
 
-      {/* MAIN CONTENT AREA */}
       <main className="flex-1 flex flex-col overflow-y-auto">
-        {/* Top Navbar */}
         <header className="h-16 border-b border-slate-800/80 bg-[#0a1226]/80 backdrop-blur-md px-8 flex items-center justify-between sticky top-0 z-30">
           <div className="flex items-center gap-2">
             <span className="text-xs uppercase tracking-wider text-slate-500">{isRole} Mode</span>
@@ -567,7 +582,6 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-4">
-            {/* Admin Password Reset Alert Badge */}
             {isRole === "admin" && pendingResets.length > 0 && (
               <button
                 onClick={() => setShowResetApprovalModal(true)}
@@ -585,9 +599,7 @@ export default function App() {
           </div>
         </header>
 
-        {/* Tab Body */}
         <div className="p-8 max-w-7xl w-full mx-auto space-y-6">
-          {/* TAB: STUDENTS (Admin View) */}
           {activeTab === "students" && (
             <div className="space-y-6 animate-in fade-in duration-300">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-900/90 border border-slate-800 p-6 rounded-2xl shadow-xl">
@@ -606,102 +618,73 @@ export default function App() {
                 )}
               </div>
 
-              {/* Stats & Search */}
-              <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-slate-900/40 p-4 rounded-xl border border-slate-800">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-slate-400 font-medium">Total Registered:</span>
-                  <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                    {students.length} Students
-                  </span>
-                </div>
-
-                <div className="relative w-full sm:w-80">
-                  <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
-                  <input
-                    type="text"
-                    placeholder="Search by student name or ID..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 bg-slate-950/80 border border-slate-800 rounded-xl text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-amber-500/60 focus:ring-1 focus:ring-amber-500/60 transition"
-                  />
+              {/* Table */}
+              <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm text-slate-300">
+                    <thead className="bg-[#0b142b] text-[11px] uppercase tracking-wider text-slate-400 border-b border-slate-800">
+                      <tr>
+                        <th className="py-4 px-6">Photo</th>
+                        <th className="py-4 px-4">Admission No</th>
+                        <th className="py-4 px-4">Full Name</th>
+                        <th className="py-4 px-4">Gender</th>
+                        <th className="py-4 px-4">DOB</th>
+                        <th className="py-4 px-4">Guardian Phone</th>
+                        <th className="py-4 px-6 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/80">
+                      {students.map((student) => (
+                        <tr key={student.id} className="hover:bg-slate-800/40 transition">
+                          <td className="py-4 px-6">
+                            <img
+                              src={student.avatar_url || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150"}
+                              alt="Avatar"
+                              className="w-10 h-12 object-cover rounded-lg border border-slate-700 shadow-sm"
+                            />
+                          </td>
+                          <td className="py-4 px-4 font-mono font-medium text-amber-400">
+                            {student.admission_number}
+                          </td>
+                          <td className="py-4 px-4 font-semibold text-white">
+                            {student.first_name} {student.last_name}
+                          </td>
+                          <td className="py-4 px-4 capitalize">
+                            <span className={`px-2.5 py-0.5 rounded-md text-xs font-medium ${
+                              student.gender === "male"
+                                ? "bg-blue-500/10 text-blue-400 border border-blue-500/20"
+                                : "bg-pink-500/10 text-pink-400 border border-pink-500/20"
+                            }`}>
+                              {student.gender}
+                            </span>
+                          </td>
+                          <td className="py-4 px-4 text-slate-400">{student.date_of_birth}</td>
+                          <td className="py-4 px-4 text-slate-400 font-mono">{(student as any).guardian_phone || "—"}</td>
+                          <td className="py-4 px-6 text-right">
+                            <button
+                              title="View Profile"
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer mr-1"
+                            >
+                              <Eye className="w-4 h-4" />
+                            </button>
+                            {isRole === "admin" && (
+                              <button
+                                title="Delete"
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition cursor-pointer"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </div>
-
-              {/* Table */}
-              {loadingStudents ? (
-                <div className="p-16 text-center text-slate-400 bg-slate-900/40 rounded-2xl border border-slate-800">
-                  <Loader2 className="w-8 h-8 animate-spin mx-auto text-amber-500 mb-3" />
-                  <p>Loading database records...</p>
-                </div>
-              ) : (
-                <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-sm text-slate-300">
-                      <thead className="bg-[#0b142b] text-[11px] uppercase tracking-wider text-slate-400 border-b border-slate-800">
-                        <tr>
-                          <th className="py-4 px-6">Photo</th>
-                          <th className="py-4 px-4">Admission No</th>
-                          <th className="py-4 px-4">Full Name</th>
-                          <th className="py-4 px-4">Gender</th>
-                          <th className="py-4 px-4">DOB</th>
-                          <th className="py-4 px-4">Guardian Phone</th>
-                          <th className="py-4 px-6 text-right">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-800/80">
-                        {students.map((student) => (
-                          <tr key={student.id} className="hover:bg-slate-800/40 transition">
-                            <td className="py-4 px-6">
-                              <img
-                                src={student.avatar_url || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150"}
-                                alt="Avatar"
-                                className="w-10 h-12 object-cover rounded-lg border border-slate-700 shadow-sm"
-                              />
-                            </td>
-                            <td className="py-4 px-4 font-mono font-medium text-amber-400">
-                              {student.admission_number}
-                            </td>
-                            <td className="py-4 px-4 font-semibold text-white">
-                              {student.first_name} {student.last_name}
-                            </td>
-                            <td className="py-4 px-4 capitalize">
-                              <span className={`px-2.5 py-0.5 rounded-md text-xs font-medium ${
-                                student.gender === "male"
-                                  ? "bg-blue-500/10 text-blue-400 border border-blue-500/20"
-                                  : "bg-pink-500/10 text-pink-400 border border-pink-500/20"
-                              }`}>
-                                {student.gender}
-                              </span>
-                            </td>
-                            <td className="py-4 px-4 text-slate-400">{student.date_of_birth}</td>
-                            <td className="py-4 px-4 text-slate-400 font-mono">{(student as any).guardian_phone || "—"}</td>
-                            <td className="py-4 px-6 text-right">
-                              <button
-                                title="View Profile"
-                                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer mr-1"
-                              >
-                                <Eye className="w-4 h-4" />
-                              </button>
-                              {isRole === "admin" && (
-                                <button
-                                  title="Delete"
-                                  className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition cursor-pointer"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
             </div>
           )}
 
-          {/* TAB: DASHBOARD */}
           {activeTab === "dashboard" && (
             <div className="space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
@@ -731,7 +714,6 @@ export default function App() {
             </div>
           )}
 
-          {/* TAB: STUDENT PROFILE (Student View) */}
           {activeTab === "my-profile" && (
             <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-8 max-w-2xl mx-auto shadow-2xl">
               <div className="flex items-center gap-5 border-b border-slate-800 pb-6">
@@ -746,28 +728,9 @@ export default function App() {
                   </span>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4 mt-6 text-sm">
-                <div className="p-4 bg-slate-950/60 rounded-xl border border-slate-800/80">
-                  <span className="text-xs text-slate-500">Father's Name</span>
-                  <p className="font-semibold text-slate-200 mt-0.5">Rafiqul Islam</p>
-                </div>
-                <div className="p-4 bg-slate-950/60 rounded-xl border border-slate-800/80">
-                  <span className="text-xs text-slate-500">Mother's Name</span>
-                  <p className="font-semibold text-slate-200 mt-0.5">Tahmina Begum</p>
-                </div>
-                <div className="p-4 bg-slate-950/60 rounded-xl border border-slate-800/80">
-                  <span className="text-xs text-slate-500">Guardian Phone</span>
-                  <p className="font-semibold text-slate-200 mt-0.5">01819000000</p>
-                </div>
-                <div className="p-4 bg-slate-950/60 rounded-xl border border-slate-800/80">
-                  <span className="text-xs text-slate-500">Blood Group</span>
-                  <p className="font-semibold text-amber-400 mt-0.5">A+</p>
-                </div>
-              </div>
             </div>
           )}
 
-          {/* OTHER TABS */}
           {activeTab !== "students" && activeTab !== "dashboard" && activeTab !== "my-profile" && (
             <div className="p-16 bg-slate-900/60 border border-slate-800 rounded-2xl text-center space-y-3">
               <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mx-auto">
@@ -775,14 +738,13 @@ export default function App() {
               </div>
               <h3 className="text-xl font-bold text-white capitalize">{activeTab} Section</h3>
               <p className="text-sm text-slate-400 max-w-md mx-auto">
-                Logged in as <b>{currentUser.full_name} ({isRole})</b>. This module is ready for next phase.
+                Logged in as <b>{currentUser.full_name} ({isRole})</b>. Ready for next phase.
               </p>
             </div>
           )}
         </div>
       </main>
 
-      {/* First-Time Login Password Change Modal */}
       {showFirstLoginModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 backdrop-blur-md p-4">
           <div className="w-full max-w-md bg-slate-900 border border-amber-500/40 rounded-2xl p-6 text-slate-100 shadow-2xl">
@@ -818,7 +780,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Admin: Password Reset Requests Approval Modal */}
       {showResetApprovalModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
           <div className="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-2xl p-6 text-slate-100 shadow-2xl relative">
