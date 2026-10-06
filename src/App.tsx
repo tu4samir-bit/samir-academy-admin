@@ -17,9 +17,25 @@ import {
   Eye,
   TrendingUp,
   Clock,
-  Loader2
+  Loader2,
+  Lock,
+  KeyRound,
+  ShieldCheck,
+  CheckCircle2,
+  AlertCircle,
+  User,
+  School
 } from "lucide-react";
 import { supabase } from "./lib/supabase";
+
+// --- Types ---
+interface UserAccount {
+  id: string;
+  user_id_code: string;
+  role: "admin" | "teacher" | "student";
+  full_name: string;
+  is_first_login: boolean;
+}
 
 interface Student {
   id: string;
@@ -34,201 +50,563 @@ interface Student {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<
-    "dashboard" | "students" | "teachers" | "classes" | "attendance" | "exams" | "marks" | "fees"
-  >("students");
-
-  const [students, setStudents] = useState<Student[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-
-  // Form State
-  const [formData, setFormData] = useState({
-    firstName: "",
-    lastName: "",
-    admissionNo: "",
-    className: "Class 10 - A",
-    dob: "",
-    gender: "male",
-    avatar: ""
+  // --- Auth State ---
+  const [currentUser, setCurrentUser] = useState<UserAccount | null>(() => {
+    const saved = localStorage.getItem("samir_academy_user");
+    return saved ? JSON.parse(saved) : null;
   });
 
-  // Supabase থেকে স্টুডেন্ট ডাটা আনা
-  const fetchStudents = async () => {
-    try {
-      setLoading(true);
-      const { data, error } = await supabase
-        .from("students")
-        .select("*")
-        .order("created_at", { ascending: false });
+  const [loginId, setLoginId] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState("");
 
-      if (error) throw error;
-      setStudents(data || []);
-    } catch (err) {
-      console.error("Fetch error:", err);
+  // Modals
+  const [showFirstLoginModal, setShowFirstLoginModal] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [showForgotModal, setShowForgotModal] = useState(false);
+  const [forgotId, setForgotId] = useState("");
+  const [forgotReason, setForgotReason] = useState("");
+  const [forgotSuccess, setForgotSuccess] = useState(false);
+
+  // Admin Pending Resets
+  const [pendingResets, setPendingResets] = useState<any[]>([]);
+  const [showResetApprovalModal, setShowResetApprovalModal] = useState(false);
+
+  // Navigation
+  const [activeTab, setActiveTab] = useState<string>("students");
+  const [students, setStudents] = useState<Student[]>([]);
+  const [loadingStudents, setLoadingStudents] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [isAddStudentOpen, setIsAddStudentOpen] = useState(false);
+
+  // --- Auth Handlers ---
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setAuthError("");
+
+    try {
+      const { data, error } = await supabase
+        .from("user_accounts")
+        .select("*")
+        .eq("user_id_code", loginId.trim())
+        .eq("password_hash", loginPassword)
+        .single();
+
+      if (error || !data) {
+        throw new Error("Invalid User ID or Password! Please try again.");
+      }
+
+      setCurrentUser(data);
+      localStorage.setItem("samir_academy_user", JSON.stringify(data));
+
+      if (data.is_first_login) {
+        setShowFirstLoginModal(true);
+      }
+
+      // Set initial tab based on role
+      if (data.role === "student") setActiveTab("my-profile");
+      else if (data.role === "teacher") setActiveTab("classes");
+      else setActiveTab("dashboard");
+    } catch (err: any) {
+      setAuthError(err.message || "Failed to login");
     } finally {
-      setLoading(false);
+      setAuthLoading(false);
     }
   };
 
-  useEffect(() => {
-    fetchStudents();
-  }, []);
+  const handleLogout = () => {
+    setCurrentUser(null);
+    localStorage.removeItem("samir_academy_user");
+    setLoginId("");
+    setLoginPassword("");
+  };
 
-  // নতুন স্টুডেন্ট যোগ করা
-  const handleAddStudent = async (e: React.FormEvent) => {
+  const handleUpdatePassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.firstName || !formData.admissionNo) return;
+    if (!newPassword || newPassword.length < 6) {
+      alert("Password must be at least 6 characters!");
+      return;
+    }
 
     try {
-      setSubmitting(true);
-      const { error } = await supabase.from("students").insert([
+      const { error } = await supabase
+        .from("user_accounts")
+        .update({ password_hash: newPassword, is_first_login: false })
+        .eq("id", currentUser?.id);
+
+      if (error) throw error;
+      alert("Password updated successfully!");
+      setShowFirstLoginModal(false);
+      if (currentUser) {
+        const updated = { ...currentUser, is_first_login: false };
+        setCurrentUser(updated);
+        localStorage.setItem("samir_academy_user", JSON.stringify(updated));
+      }
+    } catch (err: any) {
+      alert(err.message || "Failed to update password");
+    }
+  };
+
+  const handleForgotRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const { data: user } = await supabase
+        .from("user_accounts")
+        .select("role")
+        .eq("user_id_code", forgotId.trim())
+        .single();
+
+      const { error } = await supabase.from("password_reset_requests").insert([
         {
-          first_name: formData.firstName.trim(),
-          last_name: formData.lastName.trim(),
-          admission_number: formData.admissionNo.trim(),
-          class: formData.className,
-          gender: formData.gender,
-          date_of_birth: formData.dob || "2010-01-01",
-          avatar_url:
-            formData.avatar ||
-            "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80",
-          fee_status: "Paid"
+          user_id_code: forgotId.trim(),
+          role: user?.role || "student",
+          reason: forgotReason.trim(),
+          status: "pending"
         }
       ]);
 
       if (error) throw error;
-
-      await fetchStudents();
-      setIsModalOpen(false);
-      setFormData({
-        firstName: "",
-        lastName: "",
-        admissionNo: "",
-        className: "Class 10 - A",
-        dob: "",
-        gender: "male",
-        avatar: ""
-      });
+      setForgotSuccess(true);
     } catch (err: any) {
-      alert(err.message || "Failed to add student");
-    } finally {
-      setSubmitting(false);
+      alert(err.message || "Failed to submit reset request");
     }
   };
 
-  // স্টুডেন্ট ডিলিট করা
-  const deleteStudent = async (id: string) => {
-    if (confirm("Are you sure you want to delete this student?")) {
-      try {
-        const { error } = await supabase.from("students").delete().eq("id", id);
-        if (error) throw error;
-        setStudents(students.filter((s) => s.id !== id));
-      } catch (err: any) {
-        alert(err.message || "Failed to delete");
+  // Admin: Fetch Pending Password Resets
+  const fetchPendingResets = async () => {
+    if (currentUser?.role !== "admin") return;
+    const { data } = await supabase
+      .from("password_reset_requests")
+      .select("*")
+      .eq("status", "pending")
+      .order("requested_at", { ascending: false });
+    setPendingResets(data || []);
+  };
+
+  const approveReset = async (id: string, userCode: string) => {
+    try {
+      await supabase
+        .from("user_accounts")
+        .update({ password_hash: "123456", is_first_login: true })
+        .eq("user_id_code", userCode);
+
+      await supabase
+        .from("password_reset_requests")
+        .update({ status: "approved" })
+        .eq("id", id);
+
+      alert(`Password for ${userCode} reset to default: 123456`);
+      fetchPendingResets();
+    } catch (err: any) {
+      alert("Error approving reset");
+    }
+  };
+
+  // --- Students Fetch ---
+  const fetchStudents = async () => {
+    try {
+      setLoadingStudents(true);
+      const { data } = await supabase
+        .from("students")
+        .select("*")
+        .order("created_at", { ascending: false });
+      setStudents(data || []);
+    } finally {
+      setLoadingStudents(false);
+    }
+  };
+
+  useEffect(() => {
+    if (currentUser) {
+      fetchStudents();
+      if (currentUser.role === "admin") {
+        fetchPendingResets();
       }
     }
+  }, [currentUser]);
+
+  // Demo Login Helper
+  const quickLogin = (id: string, pass: string) => {
+    setLoginId(id);
+    setLoginPassword(pass);
   };
 
-  const filteredStudents = students.filter((s) => {
-    const fullName = `${s.first_name || ""} ${s.last_name || ""}`.toLowerCase();
-    const admNo = (s.admission_number || "").toLowerCase();
-    return fullName.includes(searchTerm.toLowerCase()) || admNo.includes(searchTerm.toLowerCase());
-  });
+  // =========================================================================
+  // VIEW 1: LOGIN PORTAL (যদি লগইন করা না থাকে)
+  // =========================================================================
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen bg-[#070d1c] flex items-center justify-center p-4 font-sans text-slate-100 relative overflow-hidden">
+        {/* Background glow decoration */}
+        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-amber-500/10 rounded-full blur-3xl pointer-events-none"></div>
+        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-blue-500/10 rounded-full blur-3xl pointer-events-none"></div>
+
+        <div className="w-full max-w-md bg-[#0a1226] border border-slate-800 rounded-3xl p-8 shadow-2xl relative z-10 backdrop-blur-xl">
+          {/* Header */}
+          <div className="text-center mb-8">
+            <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-500 mx-auto shadow-xl shadow-amber-500/10 mb-4">
+              <GraduationCap className="w-10 h-10" />
+            </div>
+            <h1 className="text-2xl font-bold text-white tracking-tight">Samir Academy</h1>
+            <p className="text-xs text-slate-400 mt-1">Multi-Role Academic ERP Portal</p>
+          </div>
+
+          {/* Error Message */}
+          {authError && (
+            <div className="mb-5 p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{authError}</span>
+            </div>
+          )}
+
+          {/* Login Form */}
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1.5">User ID / Admission / Teacher ID</label>
+              <div className="relative">
+                <User className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. admin, TCH-2026-001, SA-2026-001"
+                  value={loginId}
+                  onChange={(e) => setLoginId(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2.5 bg-slate-950/80 border border-slate-800 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500/60 focus:ring-1 focus:ring-amber-500/60 transition"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1.5">Password</label>
+              <div className="relative">
+                <Lock className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="password"
+                  required
+                  placeholder="Enter your password"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2.5 bg-slate-950/80 border border-slate-800 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500/60 focus:ring-1 focus:ring-amber-500/60 transition"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setForgotSuccess(false);
+                  setShowForgotModal(true);
+                }}
+                className="text-xs text-amber-400 hover:text-amber-300 transition"
+              >
+                Forgot Password?
+              </button>
+            </div>
+
+            <button
+              type="submit"
+              disabled={authLoading}
+              className="w-full bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 font-bold py-3 rounded-xl transition shadow-lg shadow-amber-500/20 flex items-center justify-center gap-2 cursor-pointer mt-2"
+            >
+              {authLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Sign In to Portal"}
+            </button>
+          </form>
+
+          {/* Quick Demo Test Buttons */}
+          <div className="mt-8 pt-6 border-t border-slate-800/80">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 text-center mb-3">
+              Quick Test Credentials
+            </p>
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => quickLogin("admin", "admin123")}
+                className="py-1.5 px-2 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-lg text-[11px] text-amber-400 font-medium transition text-center cursor-pointer"
+              >
+                👑 Admin
+              </button>
+              <button
+                type="button"
+                onClick={() => quickLogin("TCH-2026-001", "123456")}
+                className="py-1.5 px-2 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-lg text-[11px] text-blue-400 font-medium transition text-center cursor-pointer"
+              >
+                👨‍🏫 Teacher
+              </button>
+              <button
+                type="button"
+                onClick={() => quickLogin("SA-2026-001", "123456")}
+                className="py-1.5 px-2 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-lg text-[11px] text-emerald-400 font-medium transition text-center cursor-pointer"
+              >
+                🎓 Student
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Forgot Password Modal */}
+        {showForgotModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
+            <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 text-slate-100 shadow-2xl relative">
+              <button
+                onClick={() => setShowForgotModal(false)}
+                className="absolute top-4 right-4 text-slate-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                  <KeyRound className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white">Reset Password</h3>
+                  <p className="text-xs text-slate-400">Request approval from School Administrator</p>
+                </div>
+              </div>
+
+              {forgotSuccess ? (
+                <div className="py-6 text-center space-y-2">
+                  <CheckCircle2 className="w-12 h-12 text-emerald-400 mx-auto" />
+                  <h4 className="text-base font-bold text-white">Request Submitted!</h4>
+                  <p className="text-xs text-slate-400">
+                    Administrator will review and approve your request. Once approved, your password will reset to default (123456).
+                  </p>
+                  <button
+                    onClick={() => setShowForgotModal(false)}
+                    className="mt-4 px-6 py-2 bg-slate-800 hover:bg-slate-700 text-xs font-semibold rounded-xl text-white"
+                  >
+                    Close
+                  </button>
+                </div>
+              ) : (
+                <form onSubmit={handleForgotRequest} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Your User ID / Admission No *</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. SA-2026-001 or TCH-2026-001"
+                      value={forgotId}
+                      onChange={(e) => setForgotId(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Reason / Note</label>
+                    <textarea
+                      placeholder="Forgot my password..."
+                      value={forgotReason}
+                      onChange={(e) => setForgotReason(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-amber-500 h-20 resize-none"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    className="w-full bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold py-2.5 rounded-xl transition cursor-pointer"
+                  >
+                    Submit Reset Request
+                  </button>
+                </form>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // =========================================================================
+  // VIEW 2: AUTHENTICATED PORTAL (লগইন সম্পন্ন হওয়ার পর)
+  // =========================================================================
+  const isRole = currentUser.role;
 
   return (
     <div className="flex h-screen bg-[#070d1c] text-slate-100 font-sans overflow-hidden">
       {/* SIDEBAR */}
       <aside className="w-64 bg-[#0a1226] border-r border-slate-800/80 flex flex-col justify-between select-none">
         <div>
+          {/* Logo */}
           <div className="p-5 flex items-center gap-3 border-b border-slate-800/80">
             <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-500 shadow-md shadow-amber-500/10">
               <GraduationCap className="w-6 h-6" />
             </div>
             <div>
               <h1 className="text-base font-bold text-white tracking-wide">Samir Academy</h1>
-              <p className="text-[11px] text-slate-400">Management System</p>
+              <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border ${
+                isRole === "admin"
+                  ? "bg-amber-500/10 text-amber-400 border-amber-500/30"
+                  : isRole === "teacher"
+                  ? "bg-blue-500/10 text-blue-400 border-blue-500/30"
+                  : "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+              }`}>
+                {isRole} Portal
+              </span>
             </div>
           </div>
 
+          {/* Role Based Navigation */}
           <nav className="p-3 space-y-1 mt-2">
-            {[
-              { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-              { id: "students", label: "Students", icon: Users },
-              { id: "teachers", label: "Teachers", icon: UserCheck },
-              { id: "classes", label: "Classes", icon: BookOpen },
-              { id: "attendance", label: "Attendance", icon: CalendarCheck },
-              { id: "exams", label: "Exams", icon: FileText },
-              { id: "marks", label: "Marks", icon: Award },
-              { id: "fees", label: "Fees", icon: CreditCard }
-            ].map((item) => {
-              const Icon = item.icon;
-              const isActive = activeTab === item.id;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => setActiveTab(item.id as any)}
-                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all cursor-pointer ${
-                    isActive
-                      ? "bg-amber-500/15 text-amber-400 border border-amber-500/30 shadow-sm"
-                      : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
-                  }`}
-                >
-                  <Icon className={`w-4 h-4 ${isActive ? "text-amber-400" : "text-slate-400"}`} />
-                  {item.label}
-                </button>
-              );
-            })}
+            {isRole === "admin" && (
+              <>
+                {[
+                  { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+                  { id: "students", label: "Students", icon: Users },
+                  { id: "teachers", label: "Teachers", icon: UserCheck },
+                  { id: "classes", label: "Classes", icon: BookOpen },
+                  { id: "attendance", label: "Attendance", icon: CalendarCheck },
+                  { id: "exams", label: "Exams", icon: FileText },
+                  { id: "marks", label: "Marks", icon: Award },
+                  { id: "fees", label: "Fees", icon: CreditCard }
+                ].map((item) => {
+                  const Icon = item.icon;
+                  const isActive = activeTab === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => setActiveTab(item.id)}
+                      className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all cursor-pointer ${
+                        isActive
+                          ? "bg-amber-500/15 text-amber-400 border border-amber-500/30 shadow-sm"
+                          : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
+                      }`}
+                    >
+                      <Icon className={`w-4 h-4 ${isActive ? "text-amber-400" : "text-slate-400"}`} />
+                      {item.label}
+                    </button>
+                  );
+                })}
+              </>
+            )}
+
+            {isRole === "teacher" && (
+              <>
+                {[
+                  { id: "dashboard", label: "Teacher Dashboard", icon: LayoutDashboard },
+                  { id: "classes", label: "My Classes", icon: BookOpen },
+                  { id: "attendance", label: "Daily Attendance", icon: CalendarCheck },
+                  { id: "marks", label: "Marks Entry", icon: Award }
+                ].map((item) => {
+                  const Icon = item.icon;
+                  const isActive = activeTab === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => setActiveTab(item.id)}
+                      className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all cursor-pointer ${
+                        isActive
+                          ? "bg-blue-500/15 text-blue-400 border border-blue-500/30 shadow-sm"
+                          : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
+                      }`}
+                    >
+                      <Icon className={`w-4 h-4 ${isActive ? "text-blue-400" : "text-slate-400"}`} />
+                      {item.label}
+                    </button>
+                  );
+                })}
+              </>
+            )}
+
+            {isRole === "student" && (
+              <>
+                {[
+                  { id: "my-profile", label: "My Academic Profile", icon: User },
+                  { id: "attendance", label: "My Attendance", icon: CalendarCheck },
+                  { id: "marks", label: "My Marksheet & Result", icon: Award },
+                  { id: "fees", label: "Tuition Fees", icon: CreditCard }
+                ].map((item) => {
+                  const Icon = item.icon;
+                  const isActive = activeTab === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => setActiveTab(item.id)}
+                      className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all cursor-pointer ${
+                        isActive
+                          ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 shadow-sm"
+                          : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
+                      }`}
+                    >
+                      <Icon className={`w-4 h-4 ${isActive ? "text-emerald-400" : "text-slate-400"}`} />
+                      {item.label}
+                    </button>
+                  );
+                })}
+              </>
+            )}
           </nav>
         </div>
 
+        {/* Profile Footer */}
         <div className="p-4 border-t border-slate-800/80 bg-[#080f20]/60">
           <div className="flex items-center justify-between">
             <div className="overflow-hidden">
-              <p className="text-xs font-semibold text-slate-200 truncate">School Administrator</p>
-              <p className="text-[11px] text-slate-500 truncate">samir.sarj4@gmail.com</p>
+              <p className="text-xs font-semibold text-slate-200 truncate">{currentUser.full_name}</p>
+              <p className="text-[11px] text-slate-500 truncate font-mono">{currentUser.user_id_code}</p>
             </div>
-            <button title="Sign Out" className="p-2 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition cursor-pointer">
+            <button
+              onClick={handleLogout}
+              title="Sign Out"
+              className="p-2 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition cursor-pointer"
+            >
               <LogOut className="w-4 h-4" />
             </button>
           </div>
         </div>
       </aside>
 
-      {/* MAIN BODY */}
+      {/* MAIN CONTENT AREA */}
       <main className="flex-1 flex flex-col overflow-y-auto">
+        {/* Top Navbar */}
         <header className="h-16 border-b border-slate-800/80 bg-[#0a1226]/80 backdrop-blur-md px-8 flex items-center justify-between sticky top-0 z-30">
           <div className="flex items-center gap-2">
-            <span className="text-xs uppercase tracking-wider text-slate-500">Portal</span>
+            <span className="text-xs uppercase tracking-wider text-slate-500">{isRole} Mode</span>
             <span className="text-slate-600">/</span>
             <span className="text-sm font-semibold capitalize text-amber-400">{activeTab}</span>
           </div>
-          <span className="text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-3 py-1 rounded-full font-medium flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            Academic Year 2025–26
-          </span>
+
+          <div className="flex items-center gap-4">
+            {/* Admin Password Reset Alert Badge */}
+            {isRole === "admin" && pendingResets.length > 0 && (
+              <button
+                onClick={() => setShowResetApprovalModal(true)}
+                className="flex items-center gap-2 px-3 py-1 bg-amber-500/10 text-amber-400 border border-amber-500/30 rounded-full text-xs font-semibold animate-pulse cursor-pointer"
+              >
+                <ShieldCheck className="w-3.5 h-3.5" />
+                {pendingResets.length} Reset Request Pending
+              </button>
+            )}
+
+            <span className="text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-3 py-1 rounded-full font-medium flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              Academic Year 2026
+            </span>
+          </div>
         </header>
 
+        {/* Tab Body */}
         <div className="p-8 max-w-7xl w-full mx-auto space-y-6">
-          {/* STUDENTS TAB */}
+          {/* TAB: STUDENTS (Admin View) */}
           {activeTab === "students" && (
-            <div className="space-y-6">
+            <div className="space-y-6 animate-in fade-in duration-300">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-900/90 border border-slate-800 p-6 rounded-2xl shadow-xl">
                 <div>
                   <h2 className="text-2xl font-bold text-white tracking-tight">Student Management</h2>
                   <p className="text-sm text-slate-400 mt-1">Samir Academy Student Records & Directory</p>
                 </div>
-                <button
-                  onClick={() => setIsModalOpen(true)}
-                  className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 font-bold px-5 py-2.5 rounded-xl shadow-lg shadow-amber-500/20 transition-all cursor-pointer"
-                >
-                  <Plus className="h-4 w-4 stroke-[3]" />
-                  Add Student
-                </button>
+                {isRole === "admin" && (
+                  <button
+                    onClick={() => setIsAddStudentOpen(true)}
+                    className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 font-bold px-5 py-2.5 rounded-xl shadow-lg shadow-amber-500/20 transition-all cursor-pointer"
+                  >
+                    <Plus className="h-4 w-4 stroke-[3]" />
+                    Add Student
+                  </button>
+                )}
               </div>
 
+              {/* Stats & Search */}
               <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-slate-900/40 p-4 rounded-xl border border-slate-800">
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-slate-400 font-medium">Total Registered:</span>
@@ -249,7 +627,8 @@ export default function App() {
                 </div>
               </div>
 
-              {loading ? (
+              {/* Table */}
+              {loadingStudents ? (
                 <div className="p-16 text-center text-slate-400 bg-slate-900/40 rounded-2xl border border-slate-800">
                   <Loader2 className="w-8 h-8 animate-spin mx-auto text-amber-500 mb-3" />
                   <p>Loading database records...</p>
@@ -263,15 +642,14 @@ export default function App() {
                           <th className="py-4 px-6">Photo</th>
                           <th className="py-4 px-4">Admission No</th>
                           <th className="py-4 px-4">Full Name</th>
-                          <th className="py-4 px-4">Class</th>
                           <th className="py-4 px-4">Gender</th>
-                          <th className="py-4 px-4">Date of Birth</th>
-                          <th className="py-4 px-4">Fees</th>
+                          <th className="py-4 px-4">DOB</th>
+                          <th className="py-4 px-4">Guardian Phone</th>
                           <th className="py-4 px-6 text-right">Actions</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/80">
-                        {filteredStudents.map((student) => (
+                        {students.map((student) => (
                           <tr key={student.id} className="hover:bg-slate-800/40 transition">
                             <td className="py-4 px-6">
                               <img
@@ -286,7 +664,6 @@ export default function App() {
                             <td className="py-4 px-4 font-semibold text-white">
                               {student.first_name} {student.last_name}
                             </td>
-                            <td className="py-4 px-4 text-slate-300 font-medium">{student.class}</td>
                             <td className="py-4 px-4 capitalize">
                               <span className={`px-2.5 py-0.5 rounded-md text-xs font-medium ${
                                 student.gender === "male"
@@ -297,23 +674,22 @@ export default function App() {
                               </span>
                             </td>
                             <td className="py-4 px-4 text-slate-400">{student.date_of_birth}</td>
-                            <td className="py-4 px-4">
-                              <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${
-                                student.fee_status === "Paid"
-                                  ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
-                                  : "bg-rose-500/10 text-rose-400 border border-rose-500/20"
-                              }`}>
-                                {student.fee_status || "Paid"}
-                              </span>
-                            </td>
+                            <td className="py-4 px-4 text-slate-400 font-mono">{(student as any).guardian_phone || "—"}</td>
                             <td className="py-4 px-6 text-right">
                               <button
-                                onClick={() => deleteStudent(student.id)}
-                                title="Delete Student"
-                                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition cursor-pointer"
+                                title="View Profile"
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer mr-1"
                               >
-                                <Trash2 className="w-4 h-4" />
+                                <Eye className="w-4 h-4" />
                               </button>
+                              {isRole === "admin" && (
+                                <button
+                                  title="Delete"
+                                  className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition cursor-pointer"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              )}
                             </td>
                           </tr>
                         ))}
@@ -325,25 +701,29 @@ export default function App() {
             </div>
           )}
 
-          {/* DASHBOARD TAB */}
+          {/* TAB: DASHBOARD */}
           {activeTab === "dashboard" && (
             <div className="space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
                 {[
-                  { label: "Total Students", value: students.length, icon: Users, change: "Live from Supabase", color: "text-amber-400" },
-                  { label: "Total Teachers", value: "24", icon: UserCheck, change: "All active", color: "text-blue-400" },
-                  { label: "Total Classes", value: "10", icon: BookOpen, change: "Grade 1 to 10", color: "text-emerald-400" },
-                  { label: "Fees Collected", value: "৳ 8,45,000", icon: TrendingUp, change: "89% paid", color: "text-purple-400" }
+                  { label: "Total Students", value: students.length, icon: Users, color: "text-amber-400", tab: "students" },
+                  { label: "Total Teachers", value: "1", icon: UserCheck, color: "text-blue-400", tab: "teachers" },
+                  { label: "Total Classes", value: "16", icon: BookOpen, color: "text-emerald-400", tab: "classes" },
+                  { label: "Fees Collected", value: "৳ 1,500", icon: TrendingUp, color: "text-purple-400", tab: "fees" }
                 ].map((stat, i) => {
                   const Icon = stat.icon;
                   return (
-                    <div key={i} className="bg-slate-900/80 border border-slate-800 p-5 rounded-2xl shadow-lg">
+                    <div
+                      key={i}
+                      onClick={() => isRole === "admin" && setActiveTab(stat.tab)}
+                      className="bg-slate-900/80 border border-slate-800 p-5 rounded-2xl shadow-lg hover:border-amber-500/40 transition cursor-pointer"
+                    >
                       <div className="flex items-center justify-between mb-3">
                         <span className="text-xs font-medium text-slate-400">{stat.label}</span>
                         <Icon className={`w-5 h-5 ${stat.color}`} />
                       </div>
                       <div className="text-2xl font-bold text-white">{stat.value}</div>
-                      <p className="text-[11px] text-slate-500 mt-1">{stat.change}</p>
+                      <p className="text-[11px] text-slate-500 mt-1">Click to view details</p>
                     </div>
                   );
                 })}
@@ -351,148 +731,126 @@ export default function App() {
             </div>
           )}
 
-          {/* অন্যান্য ট্যাব */}
-          {activeTab !== "students" && activeTab !== "dashboard" && (
+          {/* TAB: STUDENT PROFILE (Student View) */}
+          {activeTab === "my-profile" && (
+            <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-8 max-w-2xl mx-auto shadow-2xl">
+              <div className="flex items-center gap-5 border-b border-slate-800 pb-6">
+                <div className="w-20 h-24 rounded-xl bg-slate-800 border border-amber-500/40 flex items-center justify-center text-slate-500 overflow-hidden">
+                  <User className="w-10 h-10 text-amber-500" />
+                </div>
+                <div>
+                  <h3 className="text-2xl font-bold text-white">{currentUser.full_name}</h3>
+                  <p className="text-sm font-mono text-amber-400 mt-0.5">ID: {currentUser.user_id_code}</p>
+                  <span className="inline-block mt-2 px-3 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                    Enrolled Student (Class 9 - A)
+                  </span>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4 mt-6 text-sm">
+                <div className="p-4 bg-slate-950/60 rounded-xl border border-slate-800/80">
+                  <span className="text-xs text-slate-500">Father's Name</span>
+                  <p className="font-semibold text-slate-200 mt-0.5">Rafiqul Islam</p>
+                </div>
+                <div className="p-4 bg-slate-950/60 rounded-xl border border-slate-800/80">
+                  <span className="text-xs text-slate-500">Mother's Name</span>
+                  <p className="font-semibold text-slate-200 mt-0.5">Tahmina Begum</p>
+                </div>
+                <div className="p-4 bg-slate-950/60 rounded-xl border border-slate-800/80">
+                  <span className="text-xs text-slate-500">Guardian Phone</span>
+                  <p className="font-semibold text-slate-200 mt-0.5">01819000000</p>
+                </div>
+                <div className="p-4 bg-slate-950/60 rounded-xl border border-slate-800/80">
+                  <span className="text-xs text-slate-500">Blood Group</span>
+                  <p className="font-semibold text-amber-400 mt-0.5">A+</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* OTHER TABS */}
+          {activeTab !== "students" && activeTab !== "dashboard" && activeTab !== "my-profile" && (
             <div className="p-16 bg-slate-900/60 border border-slate-800 rounded-2xl text-center space-y-3">
               <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mx-auto">
                 <BookOpen className="w-7 h-7" />
               </div>
-              <h3 className="text-xl font-bold text-white capitalize">{activeTab} Module</h3>
+              <h3 className="text-xl font-bold text-white capitalize">{activeTab} Section</h3>
               <p className="text-sm text-slate-400 max-w-md mx-auto">
-                The {activeTab} section is ready and configured.
+                Logged in as <b>{currentUser.full_name} ({isRole})</b>. This module is ready for next phase.
               </p>
             </div>
           )}
         </div>
       </main>
 
-      {/* ADD STUDENT MODAL */}
-      {isModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 animate-in fade-in duration-200"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setIsModalOpen(false);
-          }}
-        >
-          <div className="w-full max-w-lg rounded-2xl bg-slate-900 p-6 text-slate-100 border border-slate-800 shadow-2xl relative">
-            <div className="flex items-center justify-between pb-4 border-b border-slate-800">
-              <div>
-                <h3 className="text-xl font-bold text-white">Add New Student</h3>
-                <p className="text-xs text-slate-400 mt-0.5">Saves directly to Supabase Database</p>
+      {/* First-Time Login Password Change Modal */}
+      {showFirstLoginModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 backdrop-blur-md p-4">
+          <div className="w-full max-w-md bg-slate-900 border border-amber-500/40 rounded-2xl p-6 text-slate-100 shadow-2xl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                <Lock className="w-6 h-6" />
               </div>
-              <button
-                onClick={() => setIsModalOpen(false)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div>
+                <h3 className="text-lg font-bold text-white">First-Time Password Setup</h3>
+                <p className="text-xs text-slate-400">Please change your default password to continue</p>
+              </div>
             </div>
-
-            <form onSubmit={handleAddStudent} className="space-y-4 mt-5">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">First Name *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Samir"
-                    value={formData.firstName}
-                    onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
-                    className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500/60 focus:ring-1 focus:ring-amber-500/60 transition"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">Last Name *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Ahmed"
-                    value={formData.lastName}
-                    onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
-                    className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500/60 focus:ring-1 focus:ring-amber-500/60 transition"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">Admission Number *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="SA-2025-008"
-                    value={formData.admissionNo}
-                    onChange={(e) => setFormData({ ...formData, admissionNo: e.target.value })}
-                    className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3.5 py-2.5 text-sm font-mono text-white placeholder-slate-500 focus:outline-none focus:border-amber-500/60 focus:ring-1 focus:ring-amber-500/60 transition"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">Class *</label>
-                  <select
-                    value={formData.className}
-                    onChange={(e) => setFormData({ ...formData, className: e.target.value })}
-                    className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-amber-500/60 focus:ring-1 focus:ring-amber-500/60 transition"
-                  >
-                    <option value="Class 10 - A">Class 10 - A</option>
-                    <option value="Class 10 - B">Class 10 - B</option>
-                    <option value="Class 9 - A">Class 9 - A</option>
-                    <option value="Class 8 - A">Class 8 - A</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">Date of Birth</label>
-                  <input
-                    type="date"
-                    value={formData.dob}
-                    onChange={(e) => setFormData({ ...formData, dob: e.target.value })}
-                    className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-amber-500/60 focus:ring-1 focus:ring-amber-500/60 transition"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">Gender</label>
-                  <select
-                    value={formData.gender}
-                    onChange={(e) => setFormData({ ...formData, gender: e.target.value })}
-                    className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-amber-500/60 focus:ring-1 focus:ring-amber-500/60 transition"
-                  >
-                    <option value="male">Male</option>
-                    <option value="female">Female</option>
-                  </select>
-                </div>
-              </div>
-
+            <form onSubmit={handleUpdatePassword} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">Photo URL</label>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">New Secret Password *</label>
                 <input
-                  type="url"
-                  placeholder="Paste image link or leave blank"
-                  value={formData.avatar}
-                  onChange={(e) => setFormData({ ...formData, avatar: e.target.value })}
-                  className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500/60 focus:ring-1 focus:ring-amber-500/60 transition"
+                  type="password"
+                  required
+                  placeholder="Minimum 6 characters"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-amber-500"
                 />
               </div>
-
-              <div className="flex items-center gap-3 pt-4 border-t border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setIsModalOpen(false)}
-                  className="flex-1 px-4 py-2.5 rounded-xl border border-slate-800 bg-slate-800/60 hover:bg-slate-800 text-sm font-medium text-slate-300 transition cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className="flex-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold py-2.5 rounded-xl transition shadow-lg shadow-amber-500/20 cursor-pointer flex items-center justify-center gap-2"
-                >
-                  {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
-                  Save to Database
-                </button>
-              </div>
+              <button
+                type="submit"
+                className="w-full bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold py-2.5 rounded-xl transition cursor-pointer"
+              >
+                Save New Password & Continue
+              </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Admin: Password Reset Requests Approval Modal */}
+      {showResetApprovalModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
+          <div className="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-2xl p-6 text-slate-100 shadow-2xl relative">
+            <button
+              onClick={() => setShowResetApprovalModal(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <h3 className="text-lg font-bold text-white mb-1">Pending Password Reset Requests</h3>
+            <p className="text-xs text-slate-400 mb-4">Approving will reset their password to: 123456</p>
+
+            <div className="space-y-3 max-h-80 overflow-y-auto">
+              {pendingResets.length === 0 ? (
+                <p className="text-sm text-slate-500 py-6 text-center">No pending requests.</p>
+              ) : (
+                pendingResets.map((req) => (
+                  <div key={req.id} className="p-3.5 bg-slate-950 rounded-xl border border-slate-800 flex justify-between items-center">
+                    <div>
+                      <p className="text-sm font-bold text-white font-mono">{req.user_id_code} ({req.role})</p>
+                      <p className="text-xs text-slate-400 mt-0.5">{req.reason || "No reason given"}</p>
+                    </div>
+                    <button
+                      onClick={() => approveReset(req.id, req.user_id_code)}
+                      className="px-3.5 py-1.5 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/30 rounded-lg text-xs font-bold transition cursor-pointer"
+                    >
+                      Approve Reset
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </div>
       )}
