@@ -1574,6 +1574,8 @@ export default function App() {
                       <Loader2 className="w-6 h-6 animate-spin text-amber-500" />
                     ) : photoPreview ? (
                       <img src={photoPreview} alt="Passport" className="w-full h-full object-cover" />
+          ) : (
+  <User className="w-8 h-8 text-slate-600" />
                     )}
                   </div>
                 </div>
