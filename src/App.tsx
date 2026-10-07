@@ -2552,7 +2552,7 @@ export default function App() {
                 </>
               )}
               <button
-                onClick={() => setMarksheetStudent(selectedStudentProfile)}
+                onClick={() => {   const target = selectedStudentProfile;   setSelectedStudentProfile(null);   setMarksheetStudent(target); }}
                 className="py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-xl transition cursor-pointer flex items-center gap-1.5"
               >
                 <Printer className="w-4 h-4 text-amber-400" /> Marksheet
@@ -3090,24 +3090,47 @@ export default function App() {
       {marksheetStudent && (() => {
         const results = getCompiledStudentResults(marksheetStudent);
 
+        const handleCloseMarksheet = (e?: React.MouseEvent) => {
+          if (e) e.stopPropagation();
+          setMarksheetStudent(null);
+        };
+
         return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 backdrop-blur-md p-4 overflow-y-auto animate-in fade-in duration-200">
-            <div className="w-full max-w-3xl bg-white text-slate-900 rounded-3xl p-8 sm:p-10 shadow-2xl relative my-8 print:p-0 print:m-0 print:shadow-none print:w-full print:max-w-none">
-              <div className="flex items-center justify-between pb-6 mb-6 border-b border-slate-200 print:hidden">
-                <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Official Transcript Preview</span>
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/90 backdrop-blur-md p-4 overflow-y-auto animate-in fade-in duration-200">
+            <div className="w-full max-w-3xl bg-white text-slate-900 rounded-3xl p-6 sm:p-10 shadow-2xl relative my-8 print:p-0 print:m-0 print:shadow-none print:w-full print:max-w-none">
+              
+              {/* Top Action Bar (Hidden during Print) */}
+              <div className="flex items-center justify-between pb-5 mb-5 border-b border-slate-200 print:hidden">
+                <button
+                  type="button"
+                  onClick={handleCloseMarksheet}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 hover:text-slate-950 rounded-xl text-xs font-bold transition cursor-pointer border border-slate-300"
+                >
+                  <ArrowLeft className="w-4 h-4 text-slate-700" />
+                  ফিরে যান (Back to Portal)
+                </button>
+
                 <div className="flex items-center gap-2">
                   <button
+                    type="button"
                     onClick={() => window.print()}
                     className="flex items-center gap-2 px-4 py-2 bg-slate-950 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition shadow-md cursor-pointer"
                   >
-                    <Printer className="w-4 h-4 text-amber-400" /> Print / Save as PDF
+                    <Printer className="w-4 h-4 text-amber-400" />
+                    Print / Save as PDF
                   </button>
-                  <button onClick={() => setMarksheetStudent(null)} className="p-2 text-slate-400 hover:text-slate-900 cursor-pointer">
+                  <button
+                    type="button"
+                    onClick={handleCloseMarksheet}
+                    className="p-2 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-xl transition cursor-pointer border border-rose-200"
+                    title="Close Preview"
+                  >
                     <X className="w-5 h-5" />
                   </button>
                 </div>
               </div>
 
+              {/* Official Marksheet Document Body */}
               <div className="border-4 border-double border-slate-800 p-6 sm:p-8 rounded-2xl relative bg-white">
                 <div className="flex items-center justify-between border-b-2 border-slate-800 pb-5">
                   <div className="w-16 h-16 rounded-xl bg-slate-900 flex items-center justify-center text-amber-400">
@@ -3115,15 +3138,23 @@ export default function App() {
                   </div>
 
                   <div className="text-center flex-1 px-4">
-                    <h1 className="text-2xl sm:text-3xl font-extrabold uppercase tracking-tight text-slate-950">Samir Academy</h1>
-                    <p className="text-xs font-medium text-slate-600 mt-0.5">Academic Excellence & Moral Leadership • EIIN: 135892</p>
+                    <h1 className="text-2xl sm:text-3xl font-extrabold uppercase tracking-tight text-slate-950">
+                      Samir Academy
+                    </h1>
+                    <p className="text-xs font-medium text-slate-600 mt-0.5">
+                      Academic Excellence & Moral Leadership • EIIN: 135892
+                    </p>
                     <div className="inline-block mt-2 px-3 py-0.5 rounded-full bg-slate-100 border border-slate-300 text-[11px] font-bold uppercase tracking-wider text-slate-800">
                       Official Academic Transcript • {currentExam.title}
                     </div>
                   </div>
 
-                  <div className="w-16 h-20 border-2 border-slate-800 rounded-lg overflow-hidden shrink-0">
-                    <img src={marksheetStudent.avatar_url || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150"} alt="Student" className="w-full h-full object-cover" />
+                  <div className="w-16 h-20 border-2 border-slate-800 rounded-lg overflow-hidden shrink-0 shadow-sm">
+                    <img
+                      src={marksheetStudent.avatar_url || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150"}
+                      alt="Student"
+                      className="w-full h-full object-cover"
+                    />
                   </div>
                 </div>
 
@@ -3175,7 +3206,6 @@ export default function App() {
                   </table>
                 </div>
 
-                {/* Final Assessment Summary Box */}
                 <div className="p-4 bg-slate-900 text-white rounded-xl flex flex-col sm:flex-row items-center justify-between gap-4">
                   <div>
                     <span className="text-[10px] text-slate-400 font-bold uppercase block">Total Marks Obtained</span>
@@ -3210,6 +3240,27 @@ export default function App() {
                   </div>
                 </div>
               </div>
+
+              {/* Bottom Action Bar (Hidden during Print) */}
+              <div className="flex items-center justify-between pt-6 mt-6 border-t border-slate-200 print:hidden">
+                <button
+                  type="button"
+                  onClick={handleCloseMarksheet}
+                  className="flex items-center gap-1.5 px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition cursor-pointer"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                  প্রিভিউ বন্ধ করুন (Close Preview)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="flex items-center gap-2 px-5 py-2.5 bg-slate-950 hover:bg-slate-800 text-white font-bold rounded-xl text-xs transition cursor-pointer shadow-md"
+                >
+                  <Printer className="w-4 h-4 text-amber-400" />
+                  Print / Save as PDF
+                </button>
+              </div>
+
             </div>
           </div>
         );
