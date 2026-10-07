@@ -1328,7 +1328,7 @@ export default function App() {
                         {results.finalGPA}
                       </span>
                       <span className={`px-2.5 py-0.5 rounded-lg text-sm font-black ${
-                        results.isPassed ? "bg-emerald-500 text-slate-950" : "bg-rose-500 text-white"
+                       results.isPassed ? "bg-green-700 text-white border border-green-400" : "bg-rose-700 text-white"
                       }`}>
                         GRADE {results.finalGrade} ({results.isPassed ? "PASSED" : "FAILED"})
                       </span>
