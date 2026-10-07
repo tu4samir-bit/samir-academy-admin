@@ -41,7 +41,11 @@ import {
   Download,
   FileCheck,
   DollarSign,
-  Receipt
+  Receipt,
+  ChevronDown,
+  ChevronUp,
+  FileSpreadsheet,
+  Layers
 } from "lucide-react";
 import { supabase } from "./lib/supabase";
 
@@ -165,9 +169,13 @@ export default function App() {
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [loadingTeachers, setLoadingTeachers] = useState(false);
   const [isAddTeacherOpen, setIsAddTeacherOpen] = useState(false);
+  const [isEditingTeacher, setIsEditingTeacher] = useState(false);
+  const [selectedTeacherProfile, setSelectedTeacherProfile] = useState<Teacher | null>(null);
+  const [showTeacherDetails, setShowTeacherDetails] = useState(false);
   const [teacherSubmitting, setTeacherSubmitting] = useState(false);
   const [teacherSearch, setTeacherSearch] = useState("");
   const [teacherForm, setTeacherForm] = useState({
+    id: "",
     teacher_id: "",
     full_name: "",
     designation: "Assistant Teacher",
@@ -178,9 +186,10 @@ export default function App() {
     avatar_url: ""
   });
 
-  // Student Modals
+  // Student Modals & Details State
   const [isAddStudentOpen, setIsAddStudentOpen] = useState(false);
   const [selectedStudentProfile, setSelectedStudentProfile] = useState<Student | null>(null);
+  const [showStudentDetails, setShowStudentDetails] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [formSubmitting, setFormSubmitting] = useState(false);
   const [studentForm, setStudentForm] = useState({
@@ -216,6 +225,11 @@ export default function App() {
   const [attSaving, setAttSaving] = useState(false);
   const [studentMyAtt, setStudentMyAtt] = useState<any[]>([]);
 
+  // Monthly Attendance Modal State
+  const [isMonthlyAttOpen, setIsMonthlyAttOpen] = useState(false);
+  const [monthlyAttMonth, setMonthlyAttMonth] = useState("2026-10");
+  const [allAttendanceRecords, setAllAttendanceRecords] = useState<any[]>([]);
+
   // Exams & Marks State
   const [exams, setExams] = useState<Exam[]>([
     { id: "exam-1", title: "First Term Examination 2026", academic_year: "2026", start_date: "2026-04-15" },
@@ -240,6 +254,7 @@ export default function App() {
   const [feeFilterStatus, setFeeFilterStatus] = useState("All");
   const [feeSearch, setFeeSearch] = useState("");
   const [selectedReceipt, setSelectedReceipt] = useState<FeeRecord | null>(null);
+  const [statementStudent, setStatementStudent] = useState<Student | null>(null);
 
   const [collectFeeForm, setCollectFeeForm] = useState({
     student_id: "",
@@ -362,6 +377,45 @@ export default function App() {
     }
   };
 
+  const fetchFees = async () => {
+    try {
+      setLoadingFees(true);
+      const { data, error } = await supabase
+        .from("fees")
+        .select(`
+          *,
+          students (
+            id,
+            first_name,
+            last_name,
+            admission_number
+          )
+        `)
+        .order("created_at", { ascending: false });
+
+      if (!error && data) {
+        const formattedFees = data.map((f: any) => ({
+          ...f,
+          student: f.students
+        }));
+        setFeesList(formattedFees);
+      }
+    } catch (err) {
+      console.error("Fetch fees error:", err);
+    } finally {
+      setLoadingFees(false);
+    }
+  };
+
+  const fetchAllAttendance = async () => {
+    try {
+      const { data, error } = await supabase.from("attendance").select("*");
+      if (!error && data) setAllAttendanceRecords(data);
+    } catch (err) {
+      console.error("Fetch all attendance error:", err);
+    }
+  };
+
   const fetchAttendance = async () => {
     setAttLoading(true);
     try {
@@ -405,36 +459,6 @@ export default function App() {
     }
   };
 
-  const fetchFees = async () => {
-    try {
-      setLoadingFees(true);
-      const { data, error } = await supabase
-        .from("fees")
-        .select(`
-          *,
-          students (
-            id,
-            first_name,
-            last_name,
-            admission_number
-          )
-        `)
-        .order("created_at", { ascending: false });
-
-      if (!error && data) {
-        const formattedFees = data.map((f: any) => ({
-          ...f,
-          student: f.students
-        }));
-        setFeesList(formattedFees);
-      }
-    } catch (err) {
-      console.error("Fetch fees error:", err);
-    } finally {
-      setLoadingFees(false);
-    }
-  };
-
   useEffect(() => {
     if (currentUser) {
       fetchStudents();
@@ -442,6 +466,7 @@ export default function App() {
       fetchExams();
       fetchMarks();
       fetchFees();
+      fetchAllAttendance();
     }
   }, [currentUser]);
 
@@ -676,7 +701,7 @@ export default function App() {
   };
 
   const handleDeleteStudent = async (id: string, name: string) => {
-    if (!confirm(`Are you sure you want to delete ${name}?`)) return;
+    if (!confirm(`Are you sure you want to delete ${name}? All academic and fee records will be removed.`)) return;
 
     try {
       const { error } = await supabase.from("students").delete().eq("id", id);
@@ -695,37 +720,58 @@ export default function App() {
     setTeacherSubmitting(true);
 
     try {
-      const { error: tErr } = await supabase
-        .from("teachers")
-        .insert([
-          {
-            teacher_id: teacherForm.teacher_id.trim(),
+      if (isEditingTeacher) {
+        const { error: tErr } = await supabase
+          .from("teachers")
+          .update({
             full_name: teacherForm.full_name.trim(),
             designation: teacherForm.designation,
             subject_speciality: teacherForm.subject_speciality,
             phone: teacherForm.phone.trim(),
             email: teacherForm.email.trim(),
             joining_date: teacherForm.joining_date,
-            avatar_url: teacherForm.avatar_url || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150"
+            avatar_url: teacherForm.avatar_url
+          })
+          .eq("id", teacherForm.id);
+
+        if (tErr) throw tErr;
+        alert("Teacher profile updated!");
+      } else {
+        const { error: tErr } = await supabase
+          .from("teachers")
+          .insert([
+            {
+              teacher_id: teacherForm.teacher_id.trim(),
+              full_name: teacherForm.full_name.trim(),
+              designation: teacherForm.designation,
+              subject_speciality: teacherForm.subject_speciality,
+              phone: teacherForm.phone.trim(),
+              email: teacherForm.email.trim(),
+              joining_date: teacherForm.joining_date,
+              avatar_url: teacherForm.avatar_url || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150"
+            }
+          ]);
+
+        if (tErr) throw tErr;
+
+        await supabase.from("user_accounts").insert([
+          {
+            user_id_code: teacherForm.teacher_id.trim(),
+            password_hash: "123456",
+            role: "teacher",
+            full_name: teacherForm.full_name.trim(),
+            is_first_login: false
           }
         ]);
 
-      if (tErr) throw tErr;
+        alert(`Teacher registered! Login ID: ${teacherForm.teacher_id}, Password: 123456`);
+      }
 
-      await supabase.from("user_accounts").insert([
-        {
-          user_id_code: teacherForm.teacher_id.trim(),
-          password_hash: "123456",
-          role: "teacher",
-          full_name: teacherForm.full_name.trim(),
-          is_first_login: false
-        }
-      ]);
-
-      alert(`Teacher registered! Login ID: ${teacherForm.teacher_id}, Password: 123456`);
       await fetchTeachers();
       setIsAddTeacherOpen(false);
+      setIsEditingTeacher(false);
       setTeacherForm({
+        id: "",
         teacher_id: "",
         full_name: "",
         designation: "Assistant Teacher",
@@ -736,10 +782,27 @@ export default function App() {
         avatar_url: ""
       });
     } catch (err: any) {
-      alert(err.message || "Failed to add teacher");
+      alert(err.message || "Failed to save teacher");
     } finally {
       setTeacherSubmitting(false);
     }
+  };
+
+  const handleEditTeacherClick = (teacher: Teacher) => {
+    setTeacherForm({
+      id: teacher.id,
+      teacher_id: teacher.teacher_id,
+      full_name: teacher.full_name,
+      designation: teacher.designation,
+      subject_speciality: teacher.subject_speciality,
+      phone: teacher.phone,
+      email: teacher.email,
+      joining_date: teacher.joining_date || "2026-01-01",
+      avatar_url: teacher.avatar_url || ""
+    });
+    setIsEditingTeacher(true);
+    setSelectedTeacherProfile(null);
+    setIsAddTeacherOpen(true);
   };
 
   const handleDeleteTeacher = async (id: string, name: string) => {
@@ -749,6 +812,7 @@ export default function App() {
       const { error } = await supabase.from("teachers").delete().eq("id", id);
       if (error) throw error;
       setTeachers(teachers.filter((t) => t.id !== id));
+      setSelectedTeacherProfile(null);
       alert("Teacher removed successfully.");
     } catch (err: any) {
       alert(err.message || "Failed to delete teacher");
@@ -788,6 +852,7 @@ export default function App() {
 
       if (error) throw error;
       alert(`Attendance saved successfully for ${attDate}!`);
+      await fetchAllAttendance();
     } catch (err: any) {
       alert(err.message || "Failed to save attendance");
     } finally {
@@ -864,7 +929,18 @@ export default function App() {
     }
   };
 
-  // --- Fees Handler ---
+  const handleDeleteExam = async (id: string, title: string) => {
+    if (!confirm(`Delete exam "${title}"?`)) return;
+    try {
+      await supabase.from("exams").delete().eq("id", id);
+      setExams(exams.filter((e) => e.id !== id));
+      alert("Exam deleted.");
+    } catch (err: any) {
+      alert("Failed to delete exam");
+    }
+  };
+
+  // --- Fees Handlers ---
   const handleCollectFee = async (e: React.FormEvent) => {
     e.preventDefault();
     setFeeSubmitting(true);
@@ -900,6 +976,17 @@ export default function App() {
       alert(err.message || "Failed to record payment");
     } finally {
       setFeeSubmitting(false);
+    }
+  };
+
+  const handleDeleteFee = async (id: string) => {
+    if (!confirm("Are you sure you want to void / delete this fee transaction?")) return;
+    try {
+      await supabase.from("fees").delete().eq("id", id);
+      setFeesList(feesList.filter((f) => f.id !== id));
+      alert("Transaction deleted.");
+    } catch (err: any) {
+      alert("Failed to delete fee transaction");
     }
   };
 
@@ -956,7 +1043,7 @@ export default function App() {
     };
   };
 
-  // Filters
+  // Filter students
   const filteredStudents = students.filter((s) => {
     const fullName = `${s.first_name || ""} ${s.last_name || ""}`.toLowerCase();
     const admNo = (s.admission_number || "").toLowerCase();
@@ -1007,6 +1094,17 @@ export default function App() {
     : [];
 
   const currentExam = exams.find((e) => e.id === selectedExamId) || exams[0];
+
+  // Helper for Monthly Attendance Matrix
+  const getDaysInSelectedMonth = () => {
+    const [year, month] = monthlyAttMonth.split("-").map(Number);
+    return new Date(year, month, 0).getDate();
+  };
+
+  // Helper for Student Statement Ledger
+  const getStudentLedgerRecords = (studentId: string) => {
+    return feesList.filter((f) => f.student_id === studentId).sort((a, b) => (a.payment_date || "").localeCompare(b.payment_date || ""));
+  };
 
   // =========================================================================
   // VIEW 1: LOGIN PORTAL
@@ -1303,20 +1401,43 @@ export default function App() {
                           <td className="py-4 px-4">{student.class} ({student.section || "A"})</td>
                           <td className="py-4 px-4 text-slate-400 font-mono text-xs">{student.guardian_phone || "—"}</td>
                           <td className="py-4 px-6 text-right">
-                            <button
-                              onClick={() => setMarksheetStudent(student)}
-                              title="Print Marksheet"
-                              className="p-2 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 transition cursor-pointer mr-1.5"
-                            >
-                              <Printer className="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={() => setSelectedStudentProfile(student)}
-                              title="Profile"
-                              className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition cursor-pointer"
-                            >
-                              <Eye className="w-4 h-4" />
-                            </button>
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                onClick={() => {
+                                  setSelectedStudentProfile(student);
+                                  setShowStudentDetails(false);
+                                }}
+                                title="View Profile"
+                                className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
+                              >
+                                <Eye className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => setMarksheetStudent(student)}
+                                title="Print Marksheet"
+                                className="p-2 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 transition cursor-pointer"
+                              >
+                                <Printer className="w-4 h-4" />
+                              </button>
+                              {isRole === "admin" && (
+                                <>
+                                  <button
+                                    onClick={() => handleEditClick(student)}
+                                    title="Edit Student"
+                                    className="p-2 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/20 transition cursor-pointer"
+                                  >
+                                    <Edit3 className="w-4 h-4" />
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteStudent(student.id, `${student.first_name} ${student.last_name}`)}
+                                    title="Delete Student"
+                                    className="p-2 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 transition cursor-pointer"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                </>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -1342,9 +1463,17 @@ export default function App() {
                     onClick={() => {
                       const nextId = `TCH-2026-${String(teachers.length + 1).padStart(3, "0")}`;
                       setTeacherForm({
-                        ...teacherForm,
-                        teacher_id: nextId
+                        id: "",
+                        teacher_id: nextId,
+                        full_name: "",
+                        designation: "Assistant Teacher",
+                        subject_speciality: "Mathematics",
+                        phone: "",
+                        email: "",
+                        joining_date: "2026-01-01",
+                        avatar_url: ""
                       });
+                      setIsEditingTeacher(false);
                       setIsAddTeacherOpen(true);
                     }}
                     className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 font-bold px-5 py-2.5 rounded-xl shadow-lg shadow-amber-500/20 transition-all cursor-pointer"
@@ -1409,23 +1538,37 @@ export default function App() {
                           <Phone className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                           <span className="font-mono">{teacher.phone || "—"}</span>
                         </div>
-                        <div className="flex items-center gap-2 text-slate-400">
-                          <Mail className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-                          <span className="truncate">{teacher.email || "—"}</span>
-                        </div>
                       </div>
 
-                      {isRole === "admin" && (
-                        <div className="mt-5 pt-3 border-t border-slate-800 flex justify-end">
-                          <button
-                            onClick={() => handleDeleteTeacher(teacher.id, teacher.full_name)}
-                            title="Delete Teacher"
-                            className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition cursor-pointer"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      )}
+                      <div className="mt-5 pt-3 border-t border-slate-800 flex items-center justify-between">
+                        <button
+                          onClick={() => {
+                            setSelectedTeacherProfile(teacher);
+                            setShowTeacherDetails(false);
+                          }}
+                          className="text-xs text-amber-400 hover:text-amber-300 font-semibold flex items-center gap-1 cursor-pointer"
+                        >
+                          <Eye className="w-3.5 h-3.5" /> View Profile
+                        </button>
+                        {isRole === "admin" && (
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={() => handleEditTeacherClick(teacher)}
+                              title="Edit"
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+                            >
+                              <Edit3 className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteTeacher(teacher.id, teacher.full_name)}
+                              title="Delete"
+                              className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition cursor-pointer"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1494,7 +1637,10 @@ export default function App() {
                             <td className="py-4 px-4 text-slate-400 font-mono text-xs">{student.guardian_phone || "—"}</td>
                             <td className="py-4 px-6 text-right">
                               <button
-                                onClick={() => setSelectedStudentProfile(student)}
+                                onClick={() => {
+                                  setSelectedStudentProfile(student);
+                                  setShowStudentDetails(false);
+                                }}
                                 className="p-2 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
                               >
                                 <Eye className="w-4 h-4" />
@@ -1548,7 +1694,14 @@ export default function App() {
                       <p className="text-sm text-slate-400 mt-1">Select date, class and mark student attendance</p>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        onClick={() => setIsMonthlyAttOpen(true)}
+                        className="px-4 py-2 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <FileSpreadsheet className="w-4 h-4" />
+                        Export Monthly Register (PDF)
+                      </button>
                       <button
                         onClick={() => handleMarkAllPresent(attendanceTargetStudents)}
                         className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
@@ -1645,8 +1798,7 @@ export default function App() {
                                         : "text-slate-400 hover:text-white"
                                     }`}
                                   >
-                                    <Check className="w-3.5 h-3.5" />
-                                    Present
+                                    <Check className="w-3.5 h-3.5" /> Present
                                   </button>
                                   <button
                                     type="button"
@@ -1657,8 +1809,7 @@ export default function App() {
                                         : "text-slate-400 hover:text-white"
                                     }`}
                                   >
-                                    <Clock className="w-3.5 h-3.5" />
-                                    Late
+                                    <Clock className="w-3.5 h-3.5" /> Late
                                   </button>
                                   <button
                                     type="button"
@@ -1669,8 +1820,7 @@ export default function App() {
                                         : "text-slate-400 hover:text-white"
                                     }`}
                                   >
-                                    <XCircle className="w-3.5 h-3.5" />
-                                    Absent
+                                    <XCircle className="w-3.5 h-3.5" /> Absent
                                   </button>
                                 </div>
                               </td>
@@ -1727,9 +1877,19 @@ export default function App() {
                         Commences: {exam.start_date || "2026-05-01"}
                       </p>
                     </div>
-                    <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                      Published
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                        Published
+                      </span>
+                      {isRole === "admin" && (
+                        <button
+                          onClick={() => handleDeleteExam(exam.id, exam.title)}
+                          className="p-1.5 text-slate-500 hover:text-rose-400 rounded-lg hover:bg-slate-800 transition"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1967,15 +2127,20 @@ export default function App() {
                           <th className="py-4 px-4">Amount</th>
                           <th className="py-4 px-4">Paid</th>
                           <th className="py-4 px-4">Status</th>
-                          <th className="py-4 px-6 text-right">Receipt Voucher</th>
+                          <th className="py-4 px-6 text-right">Actions</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/80">
                         {filteredFees.map((fee) => (
                           <tr key={fee.id} className="hover:bg-slate-800/40 transition">
                             <td className="py-4 px-6 font-mono font-bold text-amber-400 text-xs">{fee.receipt_no || "REC-2026-001"}</td>
-                            <td className="py-4 px-4 font-semibold text-white">
-                              {fee.student ? `${fee.student.first_name} ${fee.student.last_name}` : "Student"}
+                            <td className="py-4 px-4">
+                              <p className="font-semibold text-white">
+                                {fee.student ? `${fee.student.first_name} ${fee.student.last_name}` : "Student"}
+                              </p>
+                              <p className="text-[11px] font-mono text-slate-500">
+                                {fee.student?.admission_number || "—"}
+                              </p>
                             </td>
                             <td className="py-4 px-4 text-slate-300 text-xs">{fee.fee_title}</td>
                             <td className="py-4 px-4 font-mono font-bold text-slate-200">৳ {fee.amount}</td>
@@ -1990,16 +2155,35 @@ export default function App() {
                               </span>
                             </td>
                             <td className="py-4 px-6 text-right">
-                              <button
-                                onClick={() => {
-                                  const fullStudent = students.find((s) => s.id === fee.student_id);
-                                  setSelectedReceipt({ ...fee, student: fullStudent || fee.student });
-                                }}
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold border border-slate-700 transition cursor-pointer"
-                              >
-                                <Printer className="w-3.5 h-3.5 text-amber-400" />
-                                Print Slip
-                              </button>
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  onClick={() => {
+                                    const fullStudent = students.find((s) => s.id === fee.student_id);
+                                    setSelectedReceipt({ ...fee, student: fullStudent || fee.student });
+                                  }}
+                                  title="Print Slip"
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold border border-slate-700 transition cursor-pointer"
+                                >
+                                  <Printer className="w-3.5 h-3.5 text-amber-400" /> Slip
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    const fullStudent = students.find((s) => s.id === fee.student_id);
+                                    if (fullStudent) setStatementStudent(fullStudent);
+                                  }}
+                                  title="Account Statement"
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 rounded-lg text-xs font-semibold transition cursor-pointer"
+                                >
+                                  <Layers className="w-3.5 h-3.5" /> Ledger
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteFee(fee.id)}
+                                  title="Void Transaction"
+                                  className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-slate-800 rounded-lg transition"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         ))}
@@ -2014,6 +2198,15 @@ export default function App() {
                       <h2 className="text-2xl font-bold text-white tracking-tight">My Tuition & Fee Invoices</h2>
                       <p className="text-sm text-slate-400 mt-1">Payment receipts and status for Academic Year 2026</p>
                     </div>
+                    {currentStudentData && (
+                      <button
+                        onClick={() => setStatementStudent(currentStudentData)}
+                        className="px-4 py-2 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Layers className="w-4 h-4" />
+                        My Fee Statement (Ledger)
+                      </button>
+                    )}
                   </div>
                 </div>
               )}
@@ -2039,6 +2232,27 @@ export default function App() {
                   </span>
                 </div>
               </div>
+
+              {currentStudentData && (
+                <div className="grid grid-cols-2 gap-3.5 my-6 text-xs">
+                  <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80">
+                    <span className="text-slate-500 block">Father's Name</span>
+                    <span className="font-semibold text-slate-200 mt-1 block">{currentStudentData.father_name || "—"}</span>
+                  </div>
+                  <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80">
+                    <span className="text-slate-500 block">Mother's Name</span>
+                    <span className="font-semibold text-slate-200 mt-1 block">{currentStudentData.mother_name || "—"}</span>
+                  </div>
+                  <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80">
+                    <span className="text-slate-500 block">Guardian Phone</span>
+                    <span className="font-semibold text-amber-400 font-mono mt-1 block">{currentStudentData.guardian_phone || "—"}</span>
+                  </div>
+                  <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80">
+                    <span className="text-slate-500 block">Blood Group</span>
+                    <span className="font-semibold text-emerald-400 mt-1 block">{currentStudentData.blood_group || "N/A"}</span>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -2046,16 +2260,11 @@ export default function App() {
 
       {/* ================= MODAL: ADD / EDIT STUDENT ================= */}
       {isAddStudentOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 overflow-y-auto"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setIsAddStudentOpen(false);
-          }}
-        >
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 overflow-y-auto">
           <div className="w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-3xl p-7 text-slate-100 shadow-2xl relative my-8">
             <div className="flex items-center justify-between pb-4 border-b border-slate-800">
               <h3 className="text-xl font-bold text-white">{isEditing ? "Edit Student Profile" : "Add New Student"}</h3>
-              <button onClick={() => setIsAddStudentOpen(false)} className="p-1.5 rounded-lg text-slate-400 hover:text-white">
+              <button onClick={() => setIsAddStudentOpen(false)} className="p-1.5 rounded-lg text-slate-400 hover:text-white cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -2228,7 +2437,7 @@ export default function App() {
               </div>
 
               <div className="flex items-center gap-3 pt-4 border-t border-slate-800">
-                <button type="button" onClick={() => setIsAddStudentOpen(false)} className="flex-1 px-4 py-2.5 rounded-xl border border-slate-800 bg-slate-800/60 text-sm font-medium text-slate-300">
+                <button type="button" onClick={() => setIsAddStudentOpen(false)} className="flex-1 px-4 py-2.5 rounded-xl border border-slate-800 bg-slate-800/60 text-sm font-medium text-slate-300 cursor-pointer">
                   Cancel
                 </button>
                 <button
@@ -2245,19 +2454,15 @@ export default function App() {
         </div>
       )}
 
-      {/* ================= MODAL: FULL PROFILE ================= */}
+      {/* ================= MODAL: STUDENT PROGRESSIVE PROFILE ================= */}
       {selectedStudentProfile && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 animate-in fade-in duration-200"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setSelectedStudentProfile(null);
-          }}
-        >
-          <div className="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-3xl p-7 text-slate-100 shadow-2xl relative">
-            <button onClick={() => setSelectedStudentProfile(null)} className="absolute top-5 right-5 p-1.5 text-slate-400 hover:text-white">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 overflow-y-auto">
+          <div className="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-3xl p-7 text-slate-100 shadow-2xl relative my-8">
+            <button onClick={() => setSelectedStudentProfile(null)} className="absolute top-5 right-5 p-1.5 text-slate-400 hover:text-white cursor-pointer">
               <X className="w-5 h-5" />
             </button>
 
+            {/* Step 1: Clean Basic Card (Photo + Key 5-6 Info) */}
             <div className="flex items-center gap-5 pb-6 border-b border-slate-800">
               <img
                 src={selectedStudentProfile.avatar_url || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150"}
@@ -2271,32 +2476,160 @@ export default function App() {
                   <span className="px-2.5 py-0.5 rounded-md text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                     {selectedStudentProfile.class} • Sec {selectedStudentProfile.section || "A"}
                   </span>
+                  <span className="px-2.5 py-0.5 rounded-md text-xs font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                    Blood: {selectedStudentProfile.blood_group || "N/A"}
+                  </span>
                 </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3.5 my-6 text-sm">
-              <div className="p-3.5 bg-slate-950/60 rounded-xl border border-slate-800/80">
-                <span className="text-[11px] text-slate-500">Father's Name</span>
-                <p className="font-semibold text-slate-200 mt-1">{selectedStudentProfile.father_name || "—"}</p>
+            {/* Basic Summary Row */}
+            <div className="grid grid-cols-2 gap-3 my-4 text-xs">
+              <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800">
+                <span className="text-slate-500 block">Gender</span>
+                <span className="font-semibold text-slate-200 capitalize mt-0.5 block">{selectedStudentProfile.gender}</span>
               </div>
-              <div className="p-3.5 bg-slate-950/60 rounded-xl border border-slate-800/80">
-                <span className="text-[11px] text-slate-500">Guardian Phone</span>
-                <p className="font-semibold text-amber-400 font-mono mt-1">{selectedStudentProfile.guardian_phone || "—"}</p>
+              <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800">
+                <span className="text-slate-500 block">Guardian Phone</span>
+                <span className="font-semibold text-amber-400 font-mono mt-0.5 block">{selectedStudentProfile.guardian_phone || "—"}</span>
               </div>
             </div>
 
+            {/* Toggle Button for Step 2 Details */}
+            <button
+              onClick={() => setShowStudentDetails(!showStudentDetails)}
+              className="w-full py-2 px-4 rounded-xl bg-slate-800/60 hover:bg-slate-800 text-xs font-bold text-slate-300 flex items-center justify-center gap-2 transition cursor-pointer my-2"
+            >
+              {showStudentDetails ? (
+                <>Hide Details <ChevronUp className="w-4 h-4" /></>
+              ) : (
+                <>View Full Detailed Information <ChevronDown className="w-4 h-4" /></>
+              )}
+            </button>
+
+            {/* Step 2: Expanded Deep Details */}
+            {showStudentDetails && (
+              <div className="grid grid-cols-2 gap-3 p-4 bg-slate-950/80 rounded-2xl border border-slate-800/80 my-3 text-xs animate-in fade-in duration-200">
+                <div>
+                  <span className="text-[10px] text-slate-500 uppercase block">Father's Name</span>
+                  <span className="font-medium text-slate-200">{selectedStudentProfile.father_name || "—"}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-500 uppercase block">Mother's Name</span>
+                  <span className="font-medium text-slate-200">{selectedStudentProfile.mother_name || "—"}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-500 uppercase block">Date of Birth</span>
+                  <span className="font-medium text-slate-200">{selectedStudentProfile.date_of_birth}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-500 uppercase block">Academic Session</span>
+                  <span className="font-medium text-slate-200">2026</span>
+                </div>
+                <div className="col-span-2 pt-2 border-t border-slate-800">
+                  <span className="text-[10px] text-slate-500 uppercase block">Residential Address</span>
+                  <span className="font-medium text-slate-200">{selectedStudentProfile.address || "—"}</span>
+                </div>
+              </div>
+            )}
+
+            {/* Profile Action Buttons */}
+            <div className="flex items-center gap-3 pt-4 border-t border-slate-800 mt-4">
+              {isRole === "admin" && (
+                <>
+                  <button
+                    onClick={() => handleEditClick(selectedStudentProfile)}
+                    className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    <Edit3 className="w-4 h-4" /> Edit Profile
+                  </button>
+                  <button
+                    onClick={() => handleDeleteStudent(selectedStudentProfile.id, `${selectedStudentProfile.first_name} ${selectedStudentProfile.last_name}`)}
+                    className="py-2.5 px-4 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 text-xs font-bold rounded-xl transition cursor-pointer"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </>
+              )}
+              <button
+                onClick={() => setMarksheetStudent(selectedStudentProfile)}
+                className="py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-xl transition cursor-pointer flex items-center gap-1.5"
+              >
+                <Printer className="w-4 h-4 text-amber-400" /> Marksheet
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL: TEACHER PROGRESSIVE PROFILE ================= */}
+      {selectedTeacherProfile && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 overflow-y-auto">
+          <div className="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-3xl p-7 text-slate-100 shadow-2xl relative my-8">
+            <button onClick={() => setSelectedTeacherProfile(null)} className="absolute top-5 right-5 p-1.5 text-slate-400 hover:text-white cursor-pointer">
+              <X className="w-5 h-5" />
+            </button>
+
+            {/* Basic Teacher Card */}
+            <div className="flex items-start gap-5 pb-5 border-b border-slate-800">
+              <img
+                src={selectedTeacherProfile.avatar_url || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150"}
+                alt="Teacher"
+                className="w-18 h-20 object-cover rounded-2xl border-2 border-slate-700 shadow-md"
+              />
+              <div>
+                <h3 className="text-xl font-bold text-white">{selectedTeacherProfile.full_name}</h3>
+                <p className="text-xs font-mono text-amber-400 font-bold mt-0.5">ID: {selectedTeacherProfile.teacher_id}</p>
+                <span className="inline-block mt-2 px-2.5 py-0.5 rounded-md text-xs font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                  {selectedTeacherProfile.designation} • {selectedTeacherProfile.subject_speciality}
+                </span>
+              </div>
+            </div>
+
+            {/* Summary */}
+            <div className="grid grid-cols-2 gap-3 my-4 text-xs">
+              <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800">
+                <span className="text-slate-500 block">Phone</span>
+                <span className="font-semibold text-emerald-400 font-mono mt-0.5 block">{selectedTeacherProfile.phone || "—"}</span>
+              </div>
+              <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800">
+                <span className="text-slate-500 block">Subject Speciality</span>
+                <span className="font-semibold text-slate-200 mt-0.5 block">{selectedTeacherProfile.subject_speciality}</span>
+              </div>
+            </div>
+
+            {/* Toggle Full Details */}
+            <button
+              onClick={() => setShowTeacherDetails(!showTeacherDetails)}
+              className="w-full py-2 px-4 rounded-xl bg-slate-800/60 hover:bg-slate-800 text-xs font-bold text-slate-300 flex items-center justify-center gap-2 transition cursor-pointer my-2"
+            >
+              {showTeacherDetails ? <>Hide Details <ChevronUp className="w-4 h-4" /></> : <>View Full Faculty Details <ChevronDown className="w-4 h-4" /></>}
+            </button>
+
+            {showTeacherDetails && (
+              <div className="space-y-2 p-4 bg-slate-950/80 rounded-2xl border border-slate-800 my-3 text-xs animate-in fade-in duration-200">
+                <div>
+                  <span className="text-slate-500 block">Official Email Address</span>
+                  <span className="font-medium text-slate-200">{selectedTeacherProfile.email || "—"}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block">Date of Joining</span>
+                  <span className="font-medium text-slate-200 font-mono">{selectedTeacherProfile.joining_date || "2026-01-01"}</span>
+                </div>
+              </div>
+            )}
+
             {isRole === "admin" && (
-              <div className="flex items-center gap-3 pt-4 border-t border-slate-800">
+              <div className="flex items-center gap-3 pt-4 border-t border-slate-800 mt-4">
                 <button
-                  onClick={() => handleEditClick(selectedStudentProfile)}
-                  className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 text-sm font-bold rounded-xl transition cursor-pointer"
+                  onClick={() => handleEditTeacherClick(selectedTeacherProfile)}
+                  className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5"
                 >
-                  Edit Profile
+                  <Edit3 className="w-4 h-4" /> Edit Teacher
                 </button>
                 <button
-                  onClick={() => handleDeleteStudent(selectedStudentProfile.id, `${selectedStudentProfile.first_name} ${selectedStudentProfile.last_name}`)}
-                  className="py-2.5 px-4 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 text-sm font-bold rounded-xl transition cursor-pointer"
+                  onClick={() => handleDeleteTeacher(selectedTeacherProfile.id, selectedTeacherProfile.full_name)}
+                  className="py-2.5 px-4 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 text-xs font-bold rounded-xl transition cursor-pointer"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -2306,18 +2639,13 @@ export default function App() {
         </div>
       )}
 
-      {/* ================= MODAL: ADD TEACHER ================= */}
+      {/* ================= MODAL: ADD / EDIT TEACHER ================= */}
       {isAddTeacherOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 overflow-y-auto"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setIsAddTeacherOpen(false);
-          }}
-        >
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 overflow-y-auto">
           <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl p-7 text-slate-100 shadow-2xl relative my-8">
             <div className="flex items-center justify-between pb-4 border-b border-slate-800">
-              <h3 className="text-xl font-bold text-white">Register Faculty Member</h3>
-              <button onClick={() => setIsAddTeacherOpen(false)} className="p-1.5 rounded-lg text-slate-400 hover:text-white">
+              <h3 className="text-xl font-bold text-white">{isEditingTeacher ? "Edit Faculty Profile" : "Register Faculty Member"}</h3>
+              <button onClick={() => setIsAddTeacherOpen(false)} className="p-1.5 rounded-lg text-slate-400 hover:text-white cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -2339,9 +2667,10 @@ export default function App() {
                   <input
                     type="text"
                     required
+                    disabled={isEditingTeacher}
                     value={teacherForm.teacher_id}
                     onChange={(e) => setTeacherForm({ ...teacherForm, teacher_id: e.target.value })}
-                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm font-mono text-amber-400 focus:outline-none focus:border-amber-500"
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm font-mono text-amber-400 focus:outline-none focus:border-amber-500 disabled:opacity-60"
                   />
                 </div>
               </div>
@@ -2394,11 +2723,11 @@ export default function App() {
               </div>
 
               <div className="flex gap-2 pt-4 border-t border-slate-800">
-                <button type="button" onClick={() => setIsAddTeacherOpen(false)} className="flex-1 py-2 bg-slate-800 rounded-xl text-xs text-slate-300">
+                <button type="button" onClick={() => setIsAddTeacherOpen(false)} className="flex-1 py-2.5 bg-slate-800 rounded-xl text-xs text-slate-300 cursor-pointer">
                   Cancel
                 </button>
-                <button type="submit" disabled={teacherSubmitting} className="flex-1 py-2 bg-amber-500 hover:bg-amber-600 rounded-xl text-xs font-bold text-slate-950">
-                  {teacherSubmitting ? "Saving..." : "Save Teacher"}
+                <button type="submit" disabled={teacherSubmitting} className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 rounded-xl text-xs font-bold text-slate-950 cursor-pointer">
+                  {teacherSubmitting ? "Saving..." : isEditingTeacher ? "Update Faculty Profile" : "Register Faculty Member"}
                 </button>
               </div>
             </form>
@@ -2424,11 +2753,11 @@ export default function App() {
                 />
               </div>
               <div className="flex gap-2">
-                <button type="button" onClick={() => setIsAddExamOpen(false)} className="flex-1 py-2 bg-slate-800 rounded-xl text-xs text-slate-300">
+                <button type="button" onClick={() => setIsAddExamOpen(false)} className="flex-1 py-2 bg-slate-800 rounded-xl text-xs text-slate-300 cursor-pointer">
                   Cancel
                 </button>
-                <button type="submit" className="flex-1 py-2 bg-amber-500 rounded-xl text-xs font-bold text-slate-950">
-                  Create
+                <button type="submit" className="flex-1 py-2 bg-amber-500 rounded-xl text-xs font-bold text-slate-950 cursor-pointer">
+                  Create Exam
                 </button>
               </div>
             </form>
@@ -2438,16 +2767,11 @@ export default function App() {
 
       {/* ================= MODAL: COLLECT FEE ================= */}
       {isCollectFeeOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 overflow-y-auto"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setIsCollectFeeOpen(false);
-          }}
-        >
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 overflow-y-auto">
           <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-7 text-slate-100 shadow-2xl relative my-8">
             <div className="flex items-center justify-between pb-4 border-b border-slate-800">
               <h3 className="text-xl font-bold text-white">Collect Fee Payment</h3>
-              <button onClick={() => setIsCollectFeeOpen(false)} className="p-1.5 text-slate-400 hover:text-white">
+              <button onClick={() => setIsCollectFeeOpen(false)} className="p-1.5 text-slate-400 hover:text-white cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -2519,10 +2843,10 @@ export default function App() {
               </div>
 
               <div className="flex gap-2 pt-4 border-t border-slate-800">
-                <button type="button" onClick={() => setIsCollectFeeOpen(false)} className="flex-1 py-2 bg-slate-800 rounded-xl text-xs text-slate-300">
+                <button type="button" onClick={() => setIsCollectFeeOpen(false)} className="flex-1 py-2.5 bg-slate-800 rounded-xl text-xs text-slate-300 cursor-pointer">
                   Cancel
                 </button>
-                <button type="submit" disabled={feeSubmitting} className="flex-1 py-2 bg-amber-500 hover:bg-amber-600 rounded-xl text-xs font-bold text-slate-950">
+                <button type="submit" disabled={feeSubmitting} className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 rounded-xl text-xs font-bold text-slate-950 cursor-pointer">
                   Confirm Payment
                 </button>
               </div>
@@ -2531,17 +2855,243 @@ export default function App() {
         </div>
       )}
 
+      {/* ================= MODAL: MONTHLY ATTENDANCE REGISTER PDF ================= */}
+      {isMonthlyAttOpen && (() => {
+        const daysInMonth = getDaysInSelectedMonth();
+        const daysArray = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 backdrop-blur-md p-4 overflow-y-auto">
+            <div className="w-full max-w-5xl bg-white text-slate-900 rounded-3xl p-8 shadow-2xl relative my-8 print:p-0 print:m-0 print:w-full print:max-w-none">
+              <div className="flex items-center justify-between pb-4 mb-4 border-b border-slate-200 print:hidden">
+                <div className="flex items-center gap-3">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-600">Month:</span>
+                  <input
+                    type="month"
+                    value={monthlyAttMonth}
+                    onChange={(e) => setMonthlyAttMonth(e.target.value)}
+                    className="px-2.5 py-1 bg-slate-100 border border-slate-300 rounded-lg text-xs font-mono"
+                  />
+                  <span className="text-xs font-bold text-slate-600 ml-2">Class: {attClass} (Sec {attSection})</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => window.print()}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-slate-950 text-white rounded-xl text-xs font-bold hover:bg-slate-800 transition cursor-pointer"
+                  >
+                    <Printer className="w-4 h-4 text-amber-400" /> Print Monthly Register PDF
+                  </button>
+                  <button onClick={() => setIsMonthlyAttOpen(false)} className="p-2 text-slate-400 hover:text-slate-900 cursor-pointer">
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Printable Monthly Attendance Register */}
+              <div className="border-2 border-slate-800 p-6 rounded-2xl bg-white">
+                <div className="text-center border-b-2 border-slate-800 pb-3 mb-4">
+                  <h1 className="text-2xl font-black uppercase text-slate-950">Samir Academy</h1>
+                  <p className="text-xs text-slate-600">Monthly Attendance Register & Log • Academic Session 2026</p>
+                  <p className="text-xs font-bold text-slate-800 mt-1 uppercase">
+                    Class: {attClass} | Section: {attSection} | Month: {monthlyAttMonth}
+                  </p>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-center border-collapse border border-slate-400 text-[10px]">
+                    <thead>
+                      <tr className="bg-slate-900 text-white">
+                        <th className="border border-slate-400 p-1 text-left">Roll & Student Name</th>
+                        {daysArray.map((d) => (
+                          <th key={d} className="border border-slate-400 p-1 w-6">{d}</th>
+                        ))}
+                        <th className="border border-slate-400 p-1 w-8">P</th>
+                        <th className="border border-slate-400 p-1 w-8">A</th>
+                        <th className="border border-slate-400 p-1 w-10">%</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {attendanceTargetStudents.map((st) => {
+                        let pCount = 0;
+                        let aCount = 0;
+
+                        return (
+                          <tr key={st.id} className="hover:bg-slate-50">
+                            <td className="border border-slate-400 p-1 text-left font-semibold text-slate-900 truncate max-w-[140px]">
+                              {st.first_name} {st.last_name}
+                            </td>
+                            {daysArray.map((d) => {
+                              const dStr = `${monthlyAttMonth}-${String(d).padStart(2, "0")}`;
+                              const record = allAttendanceRecords.find((r) => r.student_id === st.id && r.date === dStr);
+                              const stCode = record ? (record.status === "present" ? "P" : record.status === "absent" ? "A" : "L") : "P";
+                              if (stCode === "P") pCount++;
+                              else if (stCode === "A") aCount++;
+
+                              return (
+                                <td
+                                  key={d}
+                                  className={`border border-slate-400 p-1 font-bold ${
+                                    stCode === "P" ? "text-emerald-700" : stCode === "A" ? "text-rose-600 font-extrabold" : "text-amber-600"
+                                  }`}
+                                >
+                                  {stCode}
+                                </td>
+                              );
+                            })}
+                            <td className="border border-slate-400 p-1 font-bold text-emerald-800">{pCount}</td>
+                            <td className="border border-slate-400 p-1 font-bold text-rose-700">{aCount}</td>
+                            <td className="border border-slate-400 p-1 font-bold text-slate-900">
+                              {Math.round((pCount / daysInMonth) * 100)}%
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="grid grid-cols-2 gap-8 pt-12 text-center text-xs">
+                  <div>
+                    <div className="border-t border-slate-800 pt-1 font-bold text-slate-800">Class Teacher's Signature</div>
+                  </div>
+                  <div>
+                    <div className="border-t border-slate-800 pt-1 font-bold text-slate-800">Headmaster / Principal</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ================= MODAL: STUDENT FEE STATEMENT LEDGER ================= */}
+      {statementStudent && (() => {
+        const records = getStudentLedgerRecords(statementStudent.id);
+        const totalBilled = records.reduce((acc, r) => acc + Number(r.amount || 0), 0);
+        const totalPaid = records.reduce((acc, r) => acc + Number(r.paid_amount || 0), 0);
+        const balanceDue = Math.max(0, totalBilled - totalPaid);
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 backdrop-blur-md p-4 overflow-y-auto">
+            <div className="w-full max-w-3xl bg-white text-slate-900 rounded-3xl p-8 shadow-2xl relative my-8 print:p-0 print:m-0 print:w-full print:max-w-none">
+              <div className="flex items-center justify-between pb-4 mb-4 border-b border-slate-200 print:hidden">
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Official Student Account Ledger</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => window.print()}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-slate-950 text-white rounded-xl text-xs font-bold hover:bg-slate-800 transition cursor-pointer"
+                  >
+                    <Printer className="w-4 h-4 text-amber-400" /> Print Statement PDF
+                  </button>
+                  <button onClick={() => setStatementStudent(null)} className="p-2 text-slate-400 hover:text-slate-900 cursor-pointer">
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Statement Sheet */}
+              <div className="border-2 border-slate-800 p-6 rounded-2xl bg-white">
+                <div className="flex items-center justify-between border-b-2 border-slate-800 pb-3 mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-lg bg-slate-900 flex items-center justify-center text-amber-400">
+                      <GraduationCap className="w-7 h-7" />
+                    </div>
+                    <div>
+                      <h2 className="text-xl font-black uppercase text-slate-950">Samir Academy</h2>
+                      <p className="text-[10px] text-slate-600">Student Account Statement & Clearance Ledger • Session 2026</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <span className="px-3 py-0.5 rounded-full bg-slate-900 text-white text-[10px] font-bold uppercase">LEDGER</span>
+                    <p className="text-[10px] text-slate-500 font-mono mt-1">Generated: 2026-10-07</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-3 p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs mb-4">
+                  <div>
+                    <span className="text-[9px] text-slate-500 uppercase block">Student Name</span>
+                    <span className="font-bold text-slate-900">{statementStudent.first_name} {statementStudent.last_name}</span>
+                  </div>
+                  <div>
+                    <span className="text-[9px] text-slate-500 uppercase block">Admission ID</span>
+                    <span className="font-mono font-bold text-slate-900">{statementStudent.admission_number}</span>
+                  </div>
+                  <div>
+                    <span className="text-[9px] text-slate-500 uppercase block">Class & Sec</span>
+                    <span className="font-bold text-slate-900">{statementStudent.class} ({statementStudent.section || "A"})</span>
+                  </div>
+                </div>
+
+                {/* Ledger Summary Stats */}
+                <div className="grid grid-cols-3 gap-3 text-center my-3 p-3 bg-slate-900 text-white rounded-xl text-xs">
+                  <div>
+                    <span className="text-[10px] text-slate-400 uppercase block">Total Billed</span>
+                    <span className="font-mono font-bold text-base">৳ {totalBilled.toLocaleString()}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 uppercase block">Total Paid</span>
+                    <span className="font-mono font-bold text-base text-emerald-400">৳ {totalPaid.toLocaleString()}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 uppercase block">Current Due</span>
+                    <span className="font-mono font-bold text-base text-rose-400">৳ {balanceDue.toLocaleString()}</span>
+                  </div>
+                </div>
+
+                {/* Ledger Transactions Table */}
+                <table className="w-full text-xs text-left border border-slate-300 rounded-xl overflow-hidden my-4">
+                  <thead className="bg-slate-900 text-white text-[10px] uppercase">
+                    <tr>
+                      <th className="py-2.5 px-3">Date</th>
+                      <th className="py-2.5 px-3">Fee Item</th>
+                      <th className="py-2.5 px-3">Receipt No</th>
+                      <th className="py-2.5 px-3 text-right">Debit (৳)</th>
+                      <th className="py-2.5 px-3 text-right">Credit (৳)</th>
+                      <th className="py-2.5 px-3 text-center">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200">
+                    {records.length === 0 ? (
+                      <tr><td colSpan={6} className="text-center py-6 text-slate-400">No transaction records found.</td></tr>
+                    ) : (
+                      records.map((r) => (
+                        <tr key={r.id} className="hover:bg-slate-50">
+                          <td className="py-2 px-3 font-mono text-slate-700">{r.payment_date || "2026-05-15"}</td>
+                          <td className="py-2 px-3 font-semibold text-slate-900">{r.fee_title}</td>
+                          <td className="py-2 px-3 font-mono text-amber-700">{r.receipt_no || "REC-2026-001"}</td>
+                          <td className="py-2 px-3 font-mono text-right text-slate-700">৳ {r.amount}</td>
+                          <td className="py-2 px-3 font-mono font-bold text-right text-emerald-700">৳ {r.paid_amount}</td>
+                          <td className="py-2 px-3 text-center">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              r.status === "Paid" ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-800"
+                            }`}>
+                              {r.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+
+                <div className="flex items-end justify-between pt-8 text-[11px] text-slate-600">
+                  <span>* Official Student Ledger Document of Samir Academy.</span>
+                  <div className="text-center">
+                    <div className="w-36 border-t border-slate-800 pt-1 font-bold text-slate-900">Accounts Department</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* ================= MODAL: OFFICIAL TRANSCRIPT (MARKSHEET) ================= */}
       {marksheetStudent && (() => {
         const results = getCompiledStudentResults(marksheetStudent);
 
         return (
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 backdrop-blur-md p-4 overflow-y-auto animate-in fade-in duration-200"
-            onClick={(e) => {
-              if (e.target === e.currentTarget) setMarksheetStudent(null);
-            }}
-          >
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 backdrop-blur-md p-4 overflow-y-auto animate-in fade-in duration-200">
             <div className="w-full max-w-3xl bg-white text-slate-900 rounded-3xl p-8 sm:p-10 shadow-2xl relative my-8 print:p-0 print:m-0 print:shadow-none print:w-full print:max-w-none">
               <div className="flex items-center justify-between pb-6 mb-6 border-b border-slate-200 print:hidden">
                 <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Official Transcript Preview</span>
@@ -2550,10 +3100,9 @@ export default function App() {
                     onClick={() => window.print()}
                     className="flex items-center gap-2 px-4 py-2 bg-slate-950 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition shadow-md cursor-pointer"
                   >
-                    <Printer className="w-4 h-4 text-amber-400" />
-                    Print / Save as PDF
+                    <Printer className="w-4 h-4 text-amber-400" /> Print / Save as PDF
                   </button>
-                  <button onClick={() => setMarksheetStudent(null)} className="p-2 text-slate-400 hover:text-slate-900">
+                  <button onClick={() => setMarksheetStudent(null)} className="p-2 text-slate-400 hover:text-slate-900 cursor-pointer">
                     <X className="w-5 h-5" />
                   </button>
                 </div>
@@ -2626,7 +3175,7 @@ export default function App() {
                   </table>
                 </div>
 
-                {/* Final Assessment Summary Box (উচ্চ কনট্রাস্ট) */}
+                {/* Final Assessment Summary Box */}
                 <div className="p-4 bg-slate-900 text-white rounded-xl flex flex-col sm:flex-row items-center justify-between gap-4">
                   <div>
                     <span className="text-[10px] text-slate-400 font-bold uppercase block">Total Marks Obtained</span>
@@ -2668,12 +3217,7 @@ export default function App() {
 
       {/* ================= MODAL: DUAL-SLIP OFFICIAL MONEY RECEIPT ================= */}
       {selectedReceipt && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 backdrop-blur-md p-4 overflow-y-auto animate-in fade-in duration-200"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setSelectedReceipt(null);
-          }}
-        >
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 backdrop-blur-md p-4 overflow-y-auto animate-in fade-in duration-200">
           <div className="w-full max-w-3xl bg-white text-slate-900 rounded-3xl p-8 sm:p-10 shadow-2xl relative my-8 print:p-0 print:m-0 print:shadow-none print:w-full print:max-w-none">
             <div className="flex items-center justify-between pb-6 mb-6 border-b border-slate-200 print:hidden">
               <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Official Money Receipt Preview</span>
@@ -2682,10 +3226,9 @@ export default function App() {
                   onClick={() => window.print()}
                   className="flex items-center gap-2 px-4 py-2 bg-slate-950 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition shadow-md cursor-pointer"
                 >
-                  <Printer className="w-4 h-4 text-amber-400" />
-                  Print / Save Receipt PDF
+                  <Printer className="w-4 h-4 text-amber-400" /> Print / Save Receipt PDF
                 </button>
-                <button onClick={() => setSelectedReceipt(null)} className="p-2 text-slate-400 hover:text-slate-900">
+                <button onClick={() => setSelectedReceipt(null)} className="p-2 text-slate-400 hover:text-slate-900 cursor-pointer">
                   <X className="w-5 h-5" />
                 </button>
               </div>
