@@ -33,7 +33,11 @@ import {
   Filter,
   ArrowLeft,
   Briefcase,
-  Mail
+  Mail,
+  CheckCheck,
+  Check,
+  XCircle,
+  AlertTriangle
 } from "lucide-react";
 import { supabase } from "./lib/supabase";
 
@@ -74,6 +78,15 @@ interface Teacher {
   email: string;
   joining_date?: string;
   avatar_url?: string;
+}
+
+interface AttendanceRecord {
+  id?: string;
+  student_id: string;
+  class_name: string;
+  section: string;
+  date: string;
+  status: "present" | "absent" | "late";
 }
 
 const CLASS_LIST = [
@@ -153,6 +166,15 @@ export default function App() {
   const [processingPhoto, setProcessingPhoto] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // --- Attendance State ---
+  const [attClass, setAttClass] = useState("Class 9");
+  const [attSection, setAttSection] = useState("A");
+  const [attDate, setAttDate] = useState(new Date().toISOString().split("T")[0]);
+  const [attMap, setAttMap] = useState<{ [studentId: string]: "present" | "absent" | "late" }>({});
+  const [attLoading, setAttLoading] = useState(false);
+  const [attSaving, setAttSaving] = useState(false);
+  const [studentMyAtt, setStudentMyAtt] = useState<any[]>([]);
+
   // --- Login Handler ---
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -173,7 +195,7 @@ export default function App() {
       localStorage.setItem("samir_academy_user", JSON.stringify(authenticatedUser));
 
       if (authenticatedUser.role === "student") setActiveTab("my-profile");
-      else if (authenticatedUser.role === "teacher") setActiveTab("classes");
+      else if (authenticatedUser.role === "teacher") setActiveTab("attendance");
       else setActiveTab("dashboard");
     } catch (err: any) {
       setAuthError(err.message || "Authentication failed!");
@@ -243,12 +265,66 @@ export default function App() {
     }
   };
 
+  // --- Fetch Attendance for Selected Class & Date ---
+  const fetchAttendance = async () => {
+    setAttLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from("attendance")
+        .select("*")
+        .eq("class_name", attClass)
+        .eq("section", attSection)
+        .eq("date", attDate);
+
+      if (error) throw error;
+
+      const map: { [studentId: string]: "present" | "absent" | "late" } = {};
+      (data || []).forEach((row: any) => {
+        map[row.student_id] = row.status;
+      });
+      setAttMap(map);
+    } catch (err) {
+      console.error("Fetch attendance error:", err);
+    } finally {
+      setAttLoading(false);
+    }
+  };
+
+  // Fetch student's own attendance
+  const fetchMyAttendance = async () => {
+    if (currentUser?.role !== "student") return;
+    try {
+      const currentStudent = students.find((s) => s.admission_number === currentUser.user_id_code);
+      if (!currentStudent) return;
+
+      const { data, error } = await supabase
+        .from("attendance")
+        .select("*")
+        .eq("student_id", currentStudent.id)
+        .order("date", { ascending: false });
+
+      if (error) throw error;
+      setStudentMyAtt(data || []);
+    } catch (err) {
+      console.error("Fetch my attendance error:", err);
+    }
+  };
+
   useEffect(() => {
     if (currentUser) {
       fetchStudents();
       fetchTeachers();
     }
   }, [currentUser]);
+
+  useEffect(() => {
+    if (activeTab === "attendance" && (currentUser?.role === "admin" || currentUser?.role === "teacher")) {
+      fetchAttendance();
+    }
+    if (activeTab === "attendance" && currentUser?.role === "student") {
+      fetchMyAttendance();
+    }
+  }, [activeTab, attClass, attSection, attDate, students]);
 
   // --- Passport Photo Auto Crop (35mm x 45mm, <200KB) ---
   const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -480,7 +556,7 @@ export default function App() {
     setTeacherSubmitting(true);
 
     try {
-      const { data: newTeacher, error: tErr } = await supabase
+      const { error: tErr } = await supabase
         .from("teachers")
         .insert([
           {
@@ -493,13 +569,10 @@ export default function App() {
             joining_date: teacherForm.joining_date,
             avatar_url: teacherForm.avatar_url || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150"
           }
-        ])
-        .select()
-        .single();
+        ]);
 
       if (tErr) throw tErr;
 
-      // Automatically create User Account for Teacher Login
       await supabase.from("user_accounts").insert([
         {
           user_id_code: teacherForm.teacher_id.trim(),
@@ -510,7 +583,7 @@ export default function App() {
         }
       ]);
 
-      alert(`Teacher registered! Login ID: ${teacherForm.teacher_id}, Default Password: 123456`);
+      alert(`Teacher registered! Login ID: ${teacherForm.teacher_id}, Password: 123456`);
       await fetchTeachers();
       setIsAddTeacherOpen(false);
       setTeacherForm({
@@ -543,7 +616,47 @@ export default function App() {
     }
   };
 
-  // Filter students
+  // --- Save Daily Attendance Handler ---
+  const handleSetStudentStatus = (studentId: string, status: "present" | "absent" | "late") => {
+    setAttMap((prev) => ({
+      ...prev,
+      [studentId]: status
+    }));
+  };
+
+  const handleMarkAllPresent = (targetStudents: Student[]) => {
+    const updated = { ...attMap };
+    targetStudents.forEach((s) => {
+      updated[s.id] = "present";
+    });
+    setAttMap(updated);
+  };
+
+  const handleSaveAttendance = async (targetStudents: Student[]) => {
+    setAttSaving(true);
+    try {
+      const records = targetStudents.map((s) => ({
+        student_id: s.id,
+        class_name: attClass,
+        section: attSection,
+        date: attDate,
+        status: attMap[s.id] || "present"
+      }));
+
+      const { error } = await supabase
+        .from("attendance")
+        .upsert(records, { onConflict: "student_id,date" });
+
+      if (error) throw error;
+      alert(`Attendance saved successfully for ${attDate}!`);
+    } catch (err: any) {
+      alert(err.message || "Failed to save attendance");
+    } finally {
+      setAttSaving(false);
+    }
+  };
+
+  // Filters
   const filteredStudents = students.filter((s) => {
     const fullName = `${s.first_name || ""} ${s.last_name || ""}`.toLowerCase();
     const admNo = (s.admission_number || "").toLowerCase();
@@ -553,7 +666,6 @@ export default function App() {
     return matchSearch && matchClass;
   });
 
-  // Filter teachers
   const filteredTeachers = teachers.filter((t) => {
     const name = t.full_name.toLowerCase();
     const id = t.teacher_id.toLowerCase();
@@ -561,10 +673,19 @@ export default function App() {
     return name.includes(teacherSearch.toLowerCase()) || id.includes(teacherSearch.toLowerCase()) || sub.includes(teacherSearch.toLowerCase());
   });
 
-  // Class Drill-down students
   const classStudents = selectedClassView
     ? students.filter((s) => s.class === selectedClassView)
     : [];
+
+  const attendanceTargetStudents = students.filter(
+    (s) => s.class === attClass && (s.section || "A") === attSection
+  );
+
+  // Attendance stats for selected class
+  const presentCount = attendanceTargetStudents.filter((s) => (attMap[s.id] || "present") === "present").length;
+  const absentCount = attendanceTargetStudents.filter((s) => attMap[s.id] === "absent").length;
+  const lateCount = attendanceTargetStudents.filter((s) => attMap[s.id] === "late").length;
+  const attRate = attendanceTargetStudents.length > 0 ? Math.round((presentCount / attendanceTargetStudents.length) * 100) : 0;
 
   // =========================================================================
   // VIEW 1: LOGIN PORTAL
@@ -733,10 +854,244 @@ export default function App() {
         </header>
 
         <div className="p-8 max-w-7xl w-full mx-auto space-y-6">
-          {/* ================= 1. CLASSES TAB ================= */}
+          {/* ================= 1. ATTENDANCE TAB ================= */}
+          {activeTab === "attendance" && (
+            <div className="space-y-6 animate-in fade-in duration-300">
+              {/* ADMIN & TEACHER ATTENDANCE PORTAL */}
+              {isRole !== "student" ? (
+                <>
+                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-900/90 border border-slate-800 p-6 rounded-2xl shadow-xl">
+                    <div>
+                      <h2 className="text-2xl font-bold text-white tracking-tight">Daily Attendance Sheet</h2>
+                      <p className="text-sm text-slate-400 mt-1">
+                        Select date, class and mark student attendance (Present, Absent, Late)
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleMarkAllPresent(attendanceTargetStudents)}
+                        className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <CheckCheck className="w-4 h-4 text-emerald-400" />
+                        Mark All Present
+                      </button>
+                      <button
+                        onClick={() => handleSaveAttendance(attendanceTargetStudents)}
+                        disabled={attSaving || attendanceTargetStudents.length === 0}
+                        className="px-5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-lg shadow-amber-500/20 cursor-pointer"
+                      >
+                        {attSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <CalendarCheck className="w-4 h-4" />}
+                        Save Attendance
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Attendance Controls Bar */}
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 bg-slate-900/40 p-5 rounded-2xl border border-slate-800">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Date *</label>
+                      <input
+                        type="date"
+                        value={attDate}
+                        onChange={(e) => setAttDate(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:border-amber-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Class *</label>
+                      <select
+                        value={attClass}
+                        onChange={(e) => setAttClass(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:border-amber-500"
+                      >
+                        {CLASS_LIST.map((c) => (
+                          <option key={c} value={c}>{c}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Section *</label>
+                      <select
+                        value={attSection}
+                        onChange={(e) => setAttSection(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:border-amber-500"
+                      >
+                        <option value="A">Section A</option>
+                        <option value="B">Section B</option>
+                        <option value="C">Section C</option>
+                      </select>
+                    </div>
+                    <div className="flex items-center justify-between sm:justify-end gap-3 pt-4 sm:pt-0">
+                      <div className="text-right">
+                        <span className="text-[11px] text-slate-500 block">Attendance Rate</span>
+                        <span className="text-lg font-bold text-amber-400 font-mono">{attRate}%</span>
+                      </div>
+                      <div className="h-9 w-px bg-slate-800"></div>
+                      <div className="text-right">
+                        <span className="text-[11px] text-slate-500 block">Present / Total</span>
+                        <span className="text-sm font-bold text-emerald-400 font-mono">
+                          {presentCount} / {attendanceTargetStudents.length}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Attendance List Table */}
+                  {attLoading ? (
+                    <div className="p-16 text-center text-slate-400 bg-slate-900/40 rounded-2xl border border-slate-800">
+                      <Loader2 className="w-8 h-8 animate-spin mx-auto text-amber-500 mb-3" />
+                      <p>Loading attendance sheet...</p>
+                    </div>
+                  ) : attendanceTargetStudents.length === 0 ? (
+                    <div className="p-16 text-center text-slate-500 bg-slate-900/40 rounded-2xl border border-slate-800">
+                      <Users className="w-12 h-12 mx-auto text-slate-600 mb-2" />
+                      <p className="text-base font-semibold text-slate-300">No students enrolled in {attClass} (Sec {attSection})</p>
+                      <p className="text-xs text-slate-500 mt-1">Select another class or enroll students from Students menu.</p>
+                    </div>
+                  ) : (
+                    <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
+                      <table className="w-full text-left text-sm text-slate-300">
+                        <thead className="bg-[#0b142b] text-[11px] uppercase tracking-wider text-slate-400 border-b border-slate-800">
+                          <tr>
+                            <th className="py-4 px-6">Photo</th>
+                            <th className="py-4 px-4">Admission No</th>
+                            <th className="py-4 px-4">Student Name</th>
+                            <th className="py-4 px-4">Gender</th>
+                            <th className="py-4 px-6 text-right">Attendance Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/80">
+                          {attendanceTargetStudents.map((student) => {
+                            const status = attMap[student.id] || "present";
+                            return (
+                              <tr key={student.id} className="hover:bg-slate-800/40 transition">
+                                <td className="py-3 px-6">
+                                  <img
+                                    src={student.avatar_url || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150"}
+                                    alt="Avatar"
+                                    className="w-9 h-11 object-cover rounded-lg border border-slate-700 shadow-sm"
+                                  />
+                                </td>
+                                <td className="py-3 px-4 font-mono font-medium text-amber-400">
+                                  {student.admission_number}
+                                </td>
+                                <td className="py-3 px-4 font-semibold text-white">
+                                  {student.first_name} {student.last_name}
+                                </td>
+                                <td className="py-3 px-4 capitalize text-slate-400 text-xs">
+                                  {student.gender}
+                                </td>
+                                <td className="py-3 px-6 text-right">
+                                  <div className="inline-flex items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSetStudentStatus(student.id, "present")}
+                                      className={`px-3 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
+                                        status === "present"
+                                          ? "bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20"
+                                          : "text-slate-400 hover:text-white"
+                                      }`}
+                                    >
+                                      <Check className="w-3.5 h-3.5" />
+                                      Present
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSetStudentStatus(student.id, "late")}
+                                      className={`px-3 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
+                                        status === "late"
+                                          ? "bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20"
+                                          : "text-slate-400 hover:text-white"
+                                      }`}
+                                    >
+                                      <Clock className="w-3.5 h-3.5" />
+                                      Late
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSetStudentStatus(student.id, "absent")}
+                                      className={`px-3 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
+                                        status === "absent"
+                                          ? "bg-rose-500 text-white shadow-md shadow-rose-500/20"
+                                          : "text-slate-400 hover:text-white"
+                                      }`}
+                                    >
+                                      <XCircle className="w-3.5 h-3.5" />
+                                      Absent
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </>
+              ) : (
+                /* STUDENT VIEW: MY ATTENDANCE RECORD */
+                <div className="space-y-6">
+                  <div className="bg-slate-900/90 border border-slate-800 p-6 rounded-2xl shadow-xl flex items-center justify-between">
+                    <div>
+                      <h2 className="text-2xl font-bold text-white tracking-tight">My Attendance Report</h2>
+                      <p className="text-sm text-slate-400 mt-1">Daily presence records for Academic Year 2026</p>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-xs text-slate-400 block">Overall Presence</span>
+                      <span className="text-2xl font-bold text-emerald-400 font-mono">
+                        {studentMyAtt.length > 0
+                          ? Math.round((studentMyAtt.filter((a) => a.status === "present").length / studentMyAtt.length) * 100)
+                          : 100}%
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
+                    {studentMyAtt.length === 0 ? (
+                      <p className="text-center py-16 text-slate-500 text-sm">No attendance records logged yet.</p>
+                    ) : (
+                      <table className="w-full text-left text-sm text-slate-300">
+                        <thead className="bg-[#0b142b] text-[11px] uppercase tracking-wider text-slate-400 border-b border-slate-800">
+                          <tr>
+                            <th className="py-4 px-6">Date</th>
+                            <th className="py-4 px-4">Class</th>
+                            <th className="py-4 px-4">Section</th>
+                            <th className="py-4 px-6 text-right">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/80">
+                          {studentMyAtt.map((att) => (
+                            <tr key={att.id} className="hover:bg-slate-800/40 transition">
+                              <td className="py-3 px-6 font-mono text-white">{att.date}</td>
+                              <td className="py-3 px-4 text-slate-300">{att.class_name}</td>
+                              <td className="py-3 px-4 text-slate-300">Sec {att.section}</td>
+                              <td className="py-3 px-6 text-right">
+                                <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase ${
+                                  att.status === "present"
+                                    ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                                    : att.status === "late"
+                                    ? "bg-amber-500/10 text-amber-400 border border-amber-500/20"
+                                    : "bg-rose-500/10 text-rose-400 border border-rose-500/20"
+                                }`}>
+                                  {att.status}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ================= 2. CLASSES TAB ================= */}
           {activeTab === "classes" && (
             <div className="space-y-6 animate-in fade-in duration-300">
-              {/* If a class is clicked: Drill-down View */}
               {selectedClassView ? (
                 <div className="space-y-6">
                   <div className="flex items-center justify-between bg-slate-900/90 border border-slate-800 p-6 rounded-2xl shadow-xl">
@@ -761,7 +1116,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Student Table for this class */}
                   {classStudents.length === 0 ? (
                     <div className="p-16 text-center text-slate-500 bg-slate-900/40 rounded-2xl border border-slate-800">
                       <Users className="w-12 h-12 mx-auto text-slate-600 mb-2" />
@@ -824,7 +1178,6 @@ export default function App() {
                   )}
                 </div>
               ) : (
-                /* All Classes Cards Grid */
                 <div className="space-y-6">
                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-900/90 border border-slate-800 p-6 rounded-2xl shadow-xl">
                     <div>
@@ -870,7 +1223,7 @@ export default function App() {
             </div>
           )}
 
-          {/* ================= 2. TEACHERS TAB ================= */}
+          {/* ================= 3. TEACHERS TAB ================= */}
           {activeTab === "teachers" && (
             <div className="space-y-6 animate-in fade-in duration-300">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-900/90 border border-slate-800 p-6 rounded-2xl shadow-xl">
@@ -982,7 +1335,7 @@ export default function App() {
             </div>
           )}
 
-          {/* ================= 3. STUDENTS TAB ================= */}
+          {/* ================= 4. STUDENTS TAB ================= */}
           {activeTab === "students" && (
             <div className="space-y-6 animate-in fade-in duration-300">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-900/90 border border-slate-800 p-6 rounded-2xl shadow-xl">
@@ -1142,7 +1495,7 @@ export default function App() {
             </div>
           )}
 
-          {/* ================= 4. DASHBOARD TAB ================= */}
+          {/* ================= 5. DASHBOARD TAB ================= */}
           {activeTab === "dashboard" && (
             <div className="space-y-6 animate-in fade-in duration-300">
               <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
@@ -1172,15 +1525,15 @@ export default function App() {
             </div>
           )}
 
-          {/* ================= 5. OTHER PLACEHOLDER TABS ================= */}
-          {activeTab !== "students" && activeTab !== "teachers" && activeTab !== "classes" && activeTab !== "dashboard" && (
+          {/* ================= 6. OTHER TABS ================= */}
+          {activeTab !== "students" && activeTab !== "teachers" && activeTab !== "classes" && activeTab !== "dashboard" && activeTab !== "attendance" && (
             <div className="p-16 bg-slate-900/60 border border-slate-800 rounded-2xl text-center space-y-3">
               <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mx-auto">
                 <BookOpen className="w-7 h-7" />
               </div>
               <h3 className="text-xl font-bold text-white capitalize">{activeTab} Section</h3>
               <p className="text-sm text-slate-400 max-w-md mx-auto">
-                Current Role: <b>{isRole}</b>. Proceeding to Phase 5 & beyond for this module.
+                Current Role: <b>{isRole}</b>. Proceeding to Phase 6 & beyond for this module.
               </p>
             </div>
           )}
@@ -1221,15 +1574,8 @@ export default function App() {
                       <Loader2 className="w-6 h-6 animate-spin text-amber-500" />
                     ) : photoPreview ? (
                       <img src={photoPreview} alt="Passport" className="w-full h-full object-cover" />
-                    ) : (
-                      <User className="w-8 h-8 text-slate-600" />
                     )}
                   </div>
-                  {photoPreview && (
-                    <span className="absolute -top-1.5 -right-1.5 bg-emerald-500 text-slate-950 p-0.5 rounded-full">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                    </span>
-                  )}
                 </div>
 
                 <div className="flex-1 space-y-1.5">
